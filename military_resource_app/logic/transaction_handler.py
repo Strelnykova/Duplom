@@ -2,11 +2,23 @@
 # -*- coding: utf-8 -*-
 """
 Модуль для роботи з транзакціями ресурсів.
+
+Цей модуль забезпечує функціональність для:
+- Реєстрації транзакцій (надходження, видача, списання, повернення)
+- Оновлення кількості ресурсів
+- Отримання історії транзакцій
+- Формування звітів по транзакціях
+
+Структура бази даних:
+- resources: зберігає інформацію про ресурси
+- resource_transactions: зберігає всі транзакції
+- users: інформація про користувачів, що здійснюють транзакції
 """
 
 import sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Union
+from .db_manager import CATEGORIES  # Відносний імпорт з того ж пакету
 
 class TransactionError(Exception):
     """Базовий клас для помилок транзакцій."""
@@ -294,4 +306,55 @@ class TransactionHandler:
                 "total_quantity": row["total_quantity"]
             }
             for row in self.conn.execute(query, params).fetchall()
-        } 
+        }
+
+# --- Приклад використання ---
+if __name__ == '__main__':
+    # Створення тестового з'єднання з базою даних
+    conn = sqlite3.connect('resources.db')
+    conn.row_factory = sqlite3.Row
+    
+    # Створення обробника транзакцій
+    handler = TransactionHandler(conn)
+    
+    try:
+        # Тестування додавання транзакцій
+        test_resource_id = 1  # Замініть на існуючий ID ресурсу
+        
+        # Перевірка надходження
+        success, message = handler.add_transaction(
+            resource_id=test_resource_id,
+            transaction_type='надходження',
+            quantity_changed=10,
+            issued_by_user_id=1,
+            notes="Тестове надходження"
+        )
+        print(f"Надходження: {message}")
+        
+        # Перевірка видачі
+        success, message = handler.add_transaction(
+            resource_id=test_resource_id,
+            transaction_type='видача',
+            quantity_changed=5,
+            issued_by_user_id=1,
+            recipient_department="Тестовий підрозділ",
+            notes="Тестова видача"
+        )
+        print(f"Видача: {message}")
+        
+        # Отримання історії транзакцій
+        transactions = handler.get_resource_transactions(test_resource_id)
+        print("\nІсторія транзакцій:")
+        for t in transactions:
+            print(f"{t['transaction_date']}: {t['transaction_type']} - {t['quantity_changed']}")
+        
+        # Отримання зведення
+        summary = handler.get_transaction_summary(test_resource_id)
+        print("\nЗведення транзакцій:")
+        for type_, data in summary.items():
+            print(f"{type_}: {data['count']} транзакцій, загальна кількість: {data['total_quantity']}")
+            
+    except Exception as e:
+        print(f"Помилка при тестуванні: {e}")
+    finally:
+        conn.close() 

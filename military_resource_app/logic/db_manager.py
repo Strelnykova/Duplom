@@ -4,10 +4,12 @@
 Функції для роботи з базою даних.
 """
 
+import os
 import sqlite3
 from datetime import datetime
 
-DB_NAME = "resources.db"
+# Змінюємо шлях до бази даних
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources.db")
 
 CATEGORIES = [
     "Продукти харчування",
@@ -21,7 +23,7 @@ CATEGORIES = [
     "Ремонтні засоби та запчастини"
 ]
 
-def create_connection(db_file=DB_NAME):
+def create_connection(db_file=DB_PATH):
     """Створює з'єднання з базою даних."""
     conn = None
     try:
@@ -138,16 +140,32 @@ def create_tables(conn):
 
 # Допоміжні функції для роботи з БД
 def validate_user(conn, username, password):
-    """Перевіряє облікові дані користувача."""
-    return (conn.execute(
-        "SELECT role FROM users WHERE username=? AND password=?",
-        (username, password)
-    ).fetchone() or [None])[0]
+    """
+    Перевіряє облікові дані користувача.
+    
+    Returns:
+        tuple: (role, user_id) або (None, None) якщо автентифікація не вдалася
+    """
+    try:
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT role, id FROM users WHERE username=? AND password=?",
+            (username, password)
+        ).fetchone()
+        
+        if row:
+            return row['role'], row['id']
+    except sqlite3.Error as e:
+        print(f"Помилка при валідації користувача: {e}")
+    
+    return None, None
 
 def fetch_resources(conn, category):
     """Отримує список ресурсів для вказаної категорії."""
     return conn.execute(
-        """SELECT r.id, r.name, r.quantity, r.description, r.image_path, r.expiration_date 
+        """SELECT r.id, r.name, r.quantity, r.description, r.image_path, r.expiration_date,
+                  r.category_id, r.unit_of_measure, r.supplier, r.phone, r.origin,
+                  r.arrival_date, r.cost, r.low_stock_threshold
         FROM resources r 
         JOIN categories c ON r.category_id = c.id 
         WHERE c.name=?""", (category,)
@@ -197,4 +215,41 @@ def add_transaction(conn, resource_id, transaction_type, quantity_changed,
          datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
          notes)
     )
-    conn.commit() 
+    conn.commit()
+
+def insert_test_resources(conn):
+    """Insert test resources into the resources table."""
+    try:
+        cur = conn.cursor()
+        
+        # Get category IDs
+        cur.execute("SELECT id FROM categories WHERE name = 'Боєприпаси' LIMIT 1")
+        ammo_cat_id = cur.fetchone()['id']
+        cur.execute("SELECT id FROM categories WHERE name = 'Медикаменти' LIMIT 1")
+        med_cat_id = cur.fetchone()['id']
+        cur.execute("SELECT id FROM categories WHERE name = 'Спорядження та захист' LIMIT 1")
+        equip_cat_id = cur.fetchone()['id']
+        
+        test_resources = [
+            ('5.45x39 Ammunition', ammo_cat_id, 'rounds', 'Standard rifle ammunition'),
+            ('IFAK Individual First Aid Kit', med_cat_id, 'kit', 'Individual first aid kit'),
+            ('Kevlar Helmet', equip_cat_id, 'piece', 'Standard issue helmet'),
+            ('Bulletproof Vest', equip_cat_id, 'piece', 'Level III protection'),
+            ('Combat Boots', equip_cat_id, 'pair', 'All-weather tactical boots')
+        ]
+        
+        cur.executemany("""
+            INSERT OR IGNORE INTO resources (name, category_id, unit_of_measure, description)
+            VALUES (?, ?, ?, ?)
+        """, test_resources)
+        conn.commit()
+        print("Test resources added successfully")
+    except sqlite3.Error as e:
+        print(f"Error inserting test resources: {e}")
+
+if __name__ == '__main__':
+    conn = create_connection()
+    if conn:
+        create_tables(conn)
+        insert_test_resources(conn)  # Add test resources
+        conn.close() 

@@ -6,6 +6,13 @@
 
 import os
 import sys
+
+# Додаємо шлях до батьківської директорії в PYTHONPATH
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
+
 from PyQt6 import QtWidgets
 
 from logic.db_manager import create_connection, create_tables
@@ -30,26 +37,13 @@ def main():
     # Застосування стилів
     app.setStyleSheet(load_styles())
 
-    # Підключення до БД
-    conn = create_connection()
-    if not conn:
-        QtWidgets.QMessageBox.critical(
-            None,
-            "Помилка",
-            "Не вдалося підключитися до бази даних"
-        )
-        return 1
-
-    # Створення таблиць
-    create_tables(conn)
-
     # Показ діалогу входу
-    login = LoginDialog(conn)
+    login = LoginDialog()
     if login.exec() != QtWidgets.QDialog.DialogCode.Accepted:
         return 0
 
     # Створення та показ головного вікна
-    window = MainWindow(conn, login.role)
+    window = MainWindow(login.conn, login.user_role, login.user_id)
     window.show()
 
     # Запуск циклу подій

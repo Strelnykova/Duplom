@@ -5,14 +5,20 @@
 """
 
 from PyQt6 import QtCore, QtWidgets
-from logic.db_manager import validate_user
+from logic.db_manager import validate_user, create_connection, create_tables
 
 class LoginDialog(QtWidgets.QDialog):
-    def __init__(self, conn):
-        super().__init__()
-        self.conn = conn
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.conn = create_connection()
+        if self.conn:
+            create_tables(self.conn)
+        else:
+            QtWidgets.QMessageBox.critical(self, "Помилка", "Не вдалося підключитися до бази даних")
+            self.reject()
         self.setup_ui()
-        self.role = None
+        self.user_role = None
+        self.user_id = None
 
     def setup_ui(self):
         """Налаштування інтерфейсу."""
@@ -43,8 +49,23 @@ class LoginDialog(QtWidgets.QDialog):
 
     def try_login(self):
         """Спроба авторизації."""
-        self.role = validate_user(self.conn, self.user.text(), self.pwd.text())
-        if self.role:
+        if not self.conn:
+            QtWidgets.QMessageBox.critical(self, "Помилка", "Відсутнє з'єднання з базою даних")
+            return
+
+        username = self.user.text().strip()
+        password = self.pwd.text().strip()
+
+        if not username or not password:
+            QtWidgets.QMessageBox.warning(self, "Помилка", "Введіть логін та пароль")
+            return
+
+        self.user_role, self.user_id = validate_user(self.conn, username, password)
+        if self.user_role:
             self.accept()
         else:
-            QtWidgets.QMessageBox.warning(self, "Помилка", "Невірний логін або пароль") 
+            QtWidgets.QMessageBox.warning(self, "Помилка", "Невірний логін або пароль")
+            
+    def get_user_id(self):
+        """Повертає ID авторизованого користувача."""
+        return self.user_id 
