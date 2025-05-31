@@ -1,0 +1,75 @@
+/* Загальні стилі */
+* { 
+    font-family: "Segoe UI", Arial, sans-serif; 
+}
+
+/* Головне вікно та діалоги */
+QMainWindow, QDialog { 
+    background: #3B5323; 
+    color: #FFD700; 
+}
+
+/* Панелі інструментів та меню */
+QToolBar, QMenuBar, QStatusBar { 
+    background: #3B5323; 
+    spacing: 8px; 
+}
+
+/* Текстові мітки */
+QLabel { 
+    color: #FFD700; 
+}
+
+/* Кнопки */
+QPushButton, QToolButton {
+    background: #FFD700;
+    color: #000;
+    border: 1px solid #302B00;
+    border-radius: 4px;
+    padding: 4px 12px;
+}
+
+QPushButton:hover, QToolButton:hover {
+    background: #FFE54A;
+}
+
+QPushButton:pressed, QToolButton:pressed {
+    background: #FFC107;
+}
+
+/* Поля вводу */
+QLineEdit, QSpinBox, QComboBox {
+    background: #FFFFFF;
+    color: #000;
+    border: 1px solid #A0A0A0;
+    border-radius: 4px;
+    padding: 2px 4px;
+}
+
+/* Заголовки таблиць */
+QHeaderView::section {
+    background: #556B2F;
+    color: #FFD700;
+    font-weight: bold;
+    border: none;
+    padding: 4px;
+}
+
+/* Таблиці */
+QTableView {
+    background: #FFFFFF;
+    alternate-background-color: #F7F7F7;
+    gridline-color: #BFBFBF;
+}
+
+QTableView::item:selected {
+    background: #B8C65E;
+    color: #000;
+}
+
+/* Попередній перегляд */
+#previewLabel {
+    background: #3B5323;
+    border: 2px dashed #FFD700;
+    color: #FFD700;
+} 

@@ -1,0 +1,13 @@
+id: 28
+name: кашкет
+quantity: 2
+unit: None
+description: 
+image_path: None
+supplier: ти то
+arrival_date: бл ло
+cost: 25.0
+expiration_date: ьори о
+phone: ь ло иол
+origin: тдлтдло
+category: Форма

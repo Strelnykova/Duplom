@@ -1,0 +1,12 @@
+id: 2
+name: граната
+quantity: 5000
+description: ящиках
+image_path: 
+category: Боєприпаси, бронежилети і каски
+supplier: мимиорми
+phone: 25151
+origin: ит роп м
+arrival_date: None
+cost: 15415466.0
+expiration_date: None

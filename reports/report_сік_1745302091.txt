@@ -1,0 +1,13 @@
+id: 26
+name: сік
+quantity: 41
+unit: None
+description: томатний
+image_path: None
+supplier: None
+arrival_date: None
+cost: None
+expiration_date: None
+phone: None
+origin: None
+category: Продукти харчування

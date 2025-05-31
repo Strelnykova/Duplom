@@ -1,0 +1,13 @@
+id: 17
+name: Мясо
+quantity: 12
+unit: None
+description: килограм
+image_path: None
+supplier: Мясна-лавка
+arrival_date: 2025-04-21
+cost: 250000.0
+expiration_date: 2025-04-27
+phone: 380965147797
+origin: Житомир
+category: Продукти харчування

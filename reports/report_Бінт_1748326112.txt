@@ -1,0 +1,13 @@
+id: 23
+name: Бінт
+quantity: 955
+unit: None
+description: 
+image_path: None
+supplier: None
+arrival_date: None
+cost: None
+expiration_date: None
+phone: None
+origin: None
+category: Медикаменти

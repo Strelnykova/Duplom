@@ -1,0 +1,13 @@
+id: 33
+name: безбол
+quantity: 250
+unit: None
+description: для головної болі
+image_path: 
+supplier: None
+arrival_date: None
+cost: None
+expiration_date: None
+phone: None
+origin: None
+category: Медикаменти

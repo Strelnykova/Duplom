@@ -1,0 +1,12 @@
+id: 1
+name: Water
+quantity: 13
+description: паків
+image_path: images\img_1745483532.jpeg
+category: Продукти харчування
+supplier: ПРОЗОРА
+phone: 380695147797
+origin: Київ
+arrival_date: 2025-04-24
+cost: 15000.0
+expiration_date: 2025-05-24
