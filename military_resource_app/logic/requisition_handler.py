@@ -1,5 +1,11 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Модуль для роботи з заявками в системі обліку військового майна.
+"""
+
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import sys
 
@@ -11,371 +17,357 @@ if parent_dir not in sys.path:
 
 from logic.db_manager import create_connection, create_tables
 
-def create_requisition(created_by_user_id: int, department_requesting: str,
-                       urgency: str = 'routine', notes: str | None = None) -> int | None:
+def create_requisition(conn: sqlite3.Connection, user_id: int, department: str,
+                      urgency: str, notes: str | None = None) -> int | None:
     """
-    Creates a new requisition.
+    Створює нову заявку.
 
     Args:
-        created_by_user_id: ID of the user creating the requisition.
-        department_requesting: Department submitting the requisition.
-        urgency: Requisition urgency ('routine', 'urgent', 'critical').
-        notes: Notes for the requisition.
+        conn: З'єднання з базою даних.
+        user_id: ID користувача, що створює заявку.
+        department: Відділення, що подає заявку.
+        urgency: Терміновість заявки.
+        notes: Додаткові примітки (опціонально).
 
     Returns:
-        ID of the newly created requisition if successful, None otherwise.
+        ID створеної заявки або None у разі помилки.
     """
-    conn = create_connection()
-    if not conn:
-        return None
-
-    requisition_number = f"REQ-{datetime.now().strftime('%Y%m%d%H%M%S')}-{created_by_user_id}" # Example number generation
-    creation_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    status = 'new' # Initial status
-
     try:
         cur = conn.cursor()
+        # Генеруємо номер заявки (можна модифікувати логіку за потреби)
+        cur.execute("SELECT COUNT(*) + 1 as next_num FROM requisitions")
+        next_num = cur.fetchone()['next_num']
+        requisition_number = f"REQ-{datetime.now().strftime('%Y%m')}-{next_num:04d}"
+
         cur.execute("""
-            INSERT INTO requisitions
-            (requisition_number, created_by_user_id, department_requesting,
-             creation_date, status, urgency, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (requisition_number, created_by_user_id, department_requesting,
-              creation_date, status, urgency, notes))
+            INSERT INTO requisitions (
+                requisition_number, created_by_user_id, department_requesting,
+                creation_date, status, urgency, notes
+            ) VALUES (?, ?, ?, datetime('now'), 'нова', ?, ?)
+        """, (requisition_number, user_id, department, urgency, notes))
         conn.commit()
-        new_requisition_id = cur.lastrowid
-        print(f"Created new requisition ID: {new_requisition_id}, Number: {requisition_number}")
-        return new_requisition_id
+        return cur.lastrowid
     except sqlite3.Error as e:
-        print(f"Database error while creating requisition: {e}")
-        if conn:
-            conn.rollback()
+        print(f"Помилка створення заявки: {e}")
         return None
-    finally:
-        if conn:
-            conn.close()
 
-def add_item_to_requisition(requisition_id: int, requested_resource_name: str,
-                            quantity_requested: int, unit_of_measure: str | None = None,
-                            resource_id: int | None = None, justification: str | None = None) -> bool:
+def add_item_to_requisition(conn: sqlite3.Connection, requisition_id: int,
+                          resource_id: int | None, resource_name: str,
+                          quantity_requested: float, notes: str | None = None) -> bool:
     """
-    Adds an item to an existing requisition.
+    Додає позицію до заявки.
 
     Args:
-        requisition_id: ID of the requisition to add the item to.
-        requested_resource_name: Name of the requested resource.
-        quantity_requested: Requested quantity.
-        unit_of_measure: Unit of measure.
-        resource_id: Resource ID from the catalog (if known).
-        justification: Need justification.
+        conn: З'єднання з базою даних.
+        requisition_id: ID заявки.
+        resource_id: ID ресурсу (якщо вибрано з існуючих).
+        resource_name: Назва ресурсу.
+        quantity_requested: Запитувана кількість.
+        notes: Додаткові примітки.
 
     Returns:
-        True if item was successfully added, False otherwise.
+        True якщо успішно, False у разі помилки.
     """
-    if quantity_requested <= 0:
-        print("Error: Quantity for requisition item must be greater than zero.")
-        return False
-
-    conn = create_connection()
-    if not conn:
-        return False
-
-    item_status = 'pending' # Initial item status
-
     try:
-        cur = conn.cursor()
-        # Check if requisition exists (optional but useful)
-        cur.execute("SELECT id FROM requisitions WHERE id = ?", (requisition_id,))
-        if not cur.fetchone():
-            print(f"Error: Requisition with ID {requisition_id} not found.")
-            return False
-
-        cur.execute("""
-            INSERT INTO requisition_items
-            (requisition_id, resource_id, requested_resource_name,
-             quantity_requested, unit_of_measure, justification, item_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (requisition_id, resource_id, requested_resource_name,
-              quantity_requested, unit_of_measure, justification, item_status))
+        conn.execute("""
+            INSERT INTO requisition_items (
+                requisition_id, resource_id, requested_resource_name,
+                quantity_requested, quantity_executed, status, notes
+            ) VALUES (?, ?, ?, ?, 0, 'очікує', ?)
+        """, (requisition_id, resource_id, resource_name, quantity_requested, notes))
         conn.commit()
-        print(f"Added item '{requested_resource_name}' to requisition ID: {requisition_id}")
         return True
     except sqlite3.Error as e:
-        print(f"Database error while adding item to requisition: {e}")
-        if conn:
-            conn.rollback()
+        print(f"Помилка додавання позиції до заявки: {e}")
         return False
-    finally:
-        if conn:
-            conn.close()
 
-def get_requisitions(status: str | None = None, limit: int = 100, offset: int = 0) -> list:
+def get_requisition_details(conn: sqlite3.Connection, requisition_id: int) -> dict:
     """
-    Gets a list of requisitions with optional status filtering and pagination.
+    Отримує детальну інформацію про заявку.
 
     Args:
-        status: Requisition status to filter by (e.g., 'new', 'approved').
-        limit: Maximum number of requisitions to return.
-        offset: Offset for pagination.
+        conn: З'єднання з базою даних.
+        requisition_id: ID заявки.
 
     Returns:
-        List of dictionaries containing requisition data.
+        Словник з даними заявки та її позиціями.
+    """
+    try:
+        # Отримуємо основну інформацію про заявку
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT r.*, u.username as created_by_username
+            FROM requisitions r
+            LEFT JOIN users u ON r.created_by_user_id = u.id
+            WHERE r.id = ?
+        """, (requisition_id,))
+        requisition = dict(cur.fetchone())
+
+        # Отримуємо позиції заявки
+        cur.execute("""
+            SELECT ri.*, r.name as resource_name
+            FROM requisition_items ri
+            LEFT JOIN resources r ON ri.resource_id = r.id
+            WHERE ri.requisition_id = ?
+        """, (requisition_id,))
+        items = [dict(row) for row in cur.fetchall()]
+
+        return {
+            'requisition': requisition,
+            'items': items
+        }
+    except sqlite3.Error as e:
+        print(f"Помилка отримання деталей заявки: {e}")
+        return {'requisition': None, 'items': []}
+
+def update_requisition_status(conn: sqlite3.Connection, requisition_id: int,
+                            new_status: str, updated_by_user_id: int) -> bool:
+    """
+    Оновлює статус заявки.
+
+    Args:
+        conn: З'єднання з базою даних.
+        requisition_id: ID заявки.
+        new_status: Новий статус.
+        updated_by_user_id: ID користувача, що оновлює статус.
+
+    Returns:
+        True якщо успішно, False у разі помилки.
+    """
+    try:
+        conn.execute("""
+            UPDATE requisitions
+            SET status = ?,
+                last_updated = datetime('now'),
+                last_updated_by_user_id = ?
+            WHERE id = ?
+        """, (new_status, updated_by_user_id, requisition_id))
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Помилка оновлення статусу заявки: {e}")
+        return False
+
+def process_requisition_item_execution(conn: sqlite3.Connection, item_id: int,
+                                    quantity_executed: float,
+                                    executed_by_user_id: int) -> bool:
+    """
+    Обробляє виконання позиції заявки.
+
+    Args:
+        conn: З'єднання з базою даних.
+        item_id: ID позиції заявки.
+        quantity_executed: Виконана кількість.
+        executed_by_user_id: ID користувача, що виконує.
+
+    Returns:
+        True якщо успішно, False у разі помилки.
+    """
+    try:
+        # Отримуємо інформацію про позицію
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT ri.*, r.quantity as available_quantity
+            FROM requisition_items ri
+            LEFT JOIN resources r ON ri.resource_id = r.id
+            WHERE ri.id = ?
+        """, (item_id,))
+        item = cur.fetchone()
+
+        if not item:
+            print("Позицію не знайдено")
+            return False
+
+        # Перевіряємо наявність ресурсу
+        if item['resource_id'] is not None:
+            if item['available_quantity'] < quantity_executed:
+                print("Недостатньо ресурсу для виконання")
+                return False
+
+            # Оновлюємо кількість ресурсу
+            conn.execute("""
+                UPDATE resources
+                SET quantity = quantity - ?
+                WHERE id = ?
+            """, (quantity_executed, item['resource_id']))
+
+        # Оновлюємо статус позиції
+        new_quantity = item['quantity_executed'] + quantity_executed
+        new_status = 'виконано' if new_quantity >= item['quantity_requested'] else 'частково виконано'
+
+        conn.execute("""
+            UPDATE requisition_items
+            SET quantity_executed = quantity_executed + ?,
+                status = ?,
+                last_executed = datetime('now'),
+                last_executed_by_user_id = ?
+            WHERE id = ?
+        """, (quantity_executed, new_status, executed_by_user_id, item_id))
+
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Помилка обробки виконання позиції: {e}")
+        return False
+
+def check_and_update_overall_requisition_status(conn: sqlite3.Connection,
+                                              requisition_id: int) -> bool:
+    """
+    Перевіряє та оновлює загальний статус заявки на основі статусів її позицій.
+
+    Args:
+        conn: З'єднання з базою даних.
+        requisition_id: ID заявки.
+
+    Returns:
+        True якщо успішно, False у разі помилки.
+    """
+    try:
+        cur = conn.cursor()
+        # Отримуємо статуси всіх позицій
+        cur.execute("""
+            SELECT status
+            FROM requisition_items
+            WHERE requisition_id = ?
+        """, (requisition_id,))
+        statuses = [row['status'] for row in cur.fetchall()]
+
+        if not statuses:
+            return False
+
+        # Визначаємо загальний статус
+        if all(s == 'виконано' for s in statuses):
+            new_status = 'виконано'
+        elif any(s in ('виконано', 'частково виконано') for s in statuses):
+            new_status = 'частково виконано'
+        else:
+            return True  # Залишаємо поточний статус
+
+        # Оновлюємо статус заявки
+        conn.execute("""
+            UPDATE requisitions
+            SET status = ?,
+                last_updated = datetime('now')
+            WHERE id = ?
+        """, (new_status, requisition_id))
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"Помилка оновлення загального статусу заявки: {e}")
+        return False
+
+def get_requisitions(date_from: str | None = None, date_to: str | None = None,
+                     status: str | None = None, urgency: str | None = None,
+                     search_term: str | None = None,
+                     created_by_user_id: int | None = None,
+                     limit: int = 100, offset: int = 0) -> list:
+    """
+    Отримує список заявок з можливістю фільтрації та пагінацією.
+
+    Args:
+        date_from: Дата створення "від" (формат YYYY-MM-DD).
+        date_to: Дата створення "до" (формат YYYY-MM-DD).
+        status: Статус заявки для фільтрації.
+        urgency: Терміновість заявки для фільтрації.
+        search_term: Ключове слово для пошуку в номері заявки, відділенні або примітках.
+        created_by_user_id: ID користувача, що створив заявку (для фільтрації).
+        limit: Максимальна кількість заявок для повернення.
+        offset: Зсув для пагінації.
+
+    Returns:
+        Список словників з даними заявок.
     """
     conn = create_connection()
     if not conn:
         return []
 
-    query = """
+    base_query = """
         SELECT r.id, r.requisition_number, u.username as created_by, r.department_requesting,
                r.creation_date, r.status, r.urgency, r.notes
         FROM requisitions r
         LEFT JOIN users u ON r.created_by_user_id = u.id
     """
+    conditions = []
     params = []
 
+    if date_from:
+        # Додаємо час до дати, щоб включити весь день
+        conditions.append("r.creation_date >= ?")
+        params.append(date_from + " 00:00:00")
+    if date_to:
+        conditions.append("r.creation_date <= ?")
+        params.append(date_to + " 23:59:59")
     if status:
-        query += " WHERE r.status = ?"
+        conditions.append("r.status = ?")
         params.append(status)
+    if urgency:
+        conditions.append("r.urgency = ?")
+        params.append(urgency)
+    if search_term:
+        # Пошук за кількома полями
+        conditions.append("""
+            (r.requisition_number LIKE ? OR
+             r.department_requesting LIKE ? OR
+             r.notes LIKE ? OR
+             EXISTS (SELECT 1 FROM requisition_items ri 
+                     WHERE ri.requisition_id = r.id AND ri.requested_resource_name LIKE ?))
+        """)
+        # Додаємо % для пошуку за частковим співпадінням
+        like_term = f"%{search_term}%"
+        params.extend([like_term, like_term, like_term, like_term])
+    if created_by_user_id is not None:  # Важливо перевіряти на None, бо 0 теж може бути ID
+        conditions.append("r.created_by_user_id = ?")
+        params.append(created_by_user_id)
 
-    query += " ORDER BY r.creation_date DESC LIMIT ? OFFSET ?"
+    if conditions:
+        base_query += " WHERE " + " AND ".join(conditions)
+
+    base_query += " ORDER BY r.creation_date DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
     try:
         cur = conn.cursor()
-        cur.execute(query, tuple(params))
+        cur.execute(base_query, tuple(params))
         requisitions = cur.fetchall()
         return [dict(row) for row in requisitions]
     except sqlite3.Error as e:
-        print(f"Database error while getting requisitions list: {e}")
+        print(f"Помилка бази даних при отриманні списку заявок: {e}")
         return []
     finally:
         if conn:
             conn.close()
 
-def get_requisition_details(requisition_id: int) -> dict | None:
-    """
-    Gets details of a specific requisition, including its items.
-
-    Returns:
-        Dictionary with requisition data and list of its items, or None if requisition not found.
-    """
-    requisition_data = None
-    items_data = []
-    conn = create_connection()
-    if not conn:
-        return None
-
-    try:
-        cur = conn.cursor()
-        # Get main requisition information
-        cur.execute("""
-            SELECT r.id, r.requisition_number, r.created_by_user_id, u.username as created_by_username,
-                   r.department_requesting, r.creation_date, r.status, r.urgency, r.notes
-            FROM requisitions r
-            LEFT JOIN users u ON r.created_by_user_id = u.id
-            WHERE r.id = ?
-        """, (requisition_id,))
-        requisition_info = cur.fetchone()
-
-        if not requisition_info:
-            print(f"Requisition with ID {requisition_id} not found.")
-            return None
-        
-        requisition_data = dict(requisition_info)
-
-        # Get requisition items
-        cur.execute("""
-            SELECT ri.id, ri.resource_id, res.name as resource_name_from_db,
-                   ri.requested_resource_name, ri.quantity_requested,
-                   ri.unit_of_measure, ri.justification, ri.item_status
-            FROM requisition_items ri
-            LEFT JOIN resources res ON ri.resource_id = res.id
-            WHERE ri.requisition_id = ?
-            ORDER BY ri.id
-        """, (requisition_id,))
-        items = cur.fetchall()
-        items_data = [dict(item) for item in items]
-
-        requisition_data['items'] = items_data
-        return requisition_data
-
-    except sqlite3.Error as e:
-        print(f"Database error while getting requisition details for ID {requisition_id}: {e}")
-        return None
-    finally:
-        if conn:
-            conn.close()
-
-def update_requisition_status(requisition_id: int, new_status: str, updated_by_user_id: int | None = None) -> bool:
-    """
-    Updates requisition status.
-
-    Args:
-        requisition_id: ID of the requisition to update.
-        new_status: New requisition status.
-        updated_by_user_id: ID of the user updating the status (for logging if needed).
-
-    Returns:
-        True if status was successfully updated, False otherwise.
-    """
-    # Список допустимих статусів українською
-    valid_statuses = ['нова', 'на розгляді', 'схвалено', 'відхилено', 'частково виконано', 'виконано']
-    if new_status not in valid_statuses:
-        print(f"Error: Invalid new requisition status '{new_status}'.")
-        return False
-
-    conn = create_connection()
-    if not conn:
-        return False
-
-    try:
-        cur = conn.cursor()
-        cur.execute("UPDATE requisitions SET status = ? WHERE id = ?", (new_status, requisition_id))
-        if cur.rowcount == 0:
-            print(f"Error: Requisition with ID {requisition_id} not found for status update.")
-            return False
-        conn.commit()
-        print(f"Updated requisition ID {requisition_id} status to '{new_status}'.")
-        # Can add status change logging here if there's a corresponding table
-        return True
-    except sqlite3.Error as e:
-        print(f"Database error while updating requisition status: {e}")
-        if conn:
-            conn.rollback()
-        return False
-    finally:
-        if conn:
-            conn.close()
-
-def process_requisition_item_execution(requisition_item_id: int,
-                                       quantity_to_issue: int,
-                                       issued_by_user_id: int,
-                                       recipient_department: str) -> tuple[bool, str]:
-    """
-    Обробляє виконання однієї позиції заявки.
-    Створює транзакцію видачі та оновлює статус позиції.
-
-    Args:
-        requisition_item_id: ID позиції заявки для виконання.
-        quantity_to_issue: Кількість, яку потрібно видати.
-        issued_by_user_id: ID користувача, що здійснює видачу.
-        recipient_department: Відділення, якому видається ресурс.
-
-    Returns:
-        Кортеж (success: bool, message: str)
-    """
-    conn = create_connection()
-    if not conn:
-        return False, "Не вдалося підключитися до бази даних."
-
-    try:
-        cur = conn.cursor()
-
-        # 1. Отримати деталі позиції заявки
-        cur.execute("""
-            SELECT ri.id, ri.requisition_id, ri.resource_id, ri.requested_resource_name,
-                   ri.quantity_requested, ri.item_status, r.quantity as current_stock, r.name as stock_resource_name
-            FROM requisition_items ri
-            LEFT JOIN resources r ON ri.resource_id = r.id
-            WHERE ri.id = ?
-        """, (requisition_item_id,))
-        item = cur.fetchone()
-
-        if not item:
-            return False, f"Позицію заявки з ID {requisition_item_id} не знайдено."
-
-        if item['item_status'] == 'виконано':
-            return False, f"Позиція '{item['requested_resource_name']}' вже виконана."
-        
-        # Перевіряємо, чи позиція прив'язана до конкретного ресурсу на складі
-        if not item['resource_id']:
-            return False, (f"Неможливо автоматично видати '{item['requested_resource_name']}', "
-                           f"оскільки позиція не пов'язана з конкретним ресурсом на складі (resource_id відсутній). "
-                           f"Спочатку додайте цей ресурс на склад та прив'яжіть до позиції заявки, або оприбуткуйте його.")
-
-        if quantity_to_issue <= 0:
-            return False, "Кількість для видачі повинна бути більшою за нуль."
-
-        if quantity_to_issue > item['quantity_requested'] and item['item_status'] != 'частково виконано':
-             print(f"Увага: видається ({quantity_to_issue}) більше, ніж запитано ({item['quantity_requested']}) для '{item['stock_resource_name']}'")
-
-        if item['current_stock'] is None or item['current_stock'] < quantity_to_issue:
-            return False, (f"Недостатньо ресурсу '{item['stock_resource_name']}' на складі. "
-                           f"В наявності: {item['current_stock'] or 0}, потрібно: {quantity_to_issue}.")
-
-        # 3. Зареєструвати транзакцію видачі
-        transaction_notes = f"Видача по заявці ID: {item['requisition_id']}, позиція ID: {requisition_item_id}"
-        
-        from .transaction_handler import TransactionHandler
-        transaction_handler = TransactionHandler(conn)
-        transaction_success, transaction_message = transaction_handler.add_transaction(
-            resource_id=item['resource_id'],
-            transaction_type='видача',
-            quantity_changed=quantity_to_issue,
-            recipient_department=recipient_department,
-            issued_by_user_id=issued_by_user_id,
-            notes=transaction_notes
-        )
-
-        if not transaction_success:
-            return False, f"Не вдалося зареєструвати транзакцію видачі: {transaction_message}"
-
-        # 4. Оновити статус позиції заявки
-        new_item_status = 'виконано'
-        cur.execute("UPDATE requisition_items SET item_status = ? WHERE id = ?", (new_item_status, requisition_item_id))
-        
-        # 5. Перевірити і оновити загальний статус заявки
-        check_and_update_overall_requisition_status(item['requisition_id'], conn)
-        
-        conn.commit()
-        return True, f"Позицію '{item['stock_resource_name']}' (кількість: {quantity_to_issue}) успішно видано."
-
-    except sqlite3.Error as e:
-        print(f"Помилка бази даних при виконанні позиції заявки: {e}")
-        if conn:
-            conn.rollback()
-        return False, f"Помилка бази даних: {e}"
-    finally:
-        if conn:
-            conn.close()
-
-def check_and_update_overall_requisition_status(requisition_id: int, db_connection: sqlite3.Connection):
-    """
-    Перевіряє статуси всіх позицій заявки та оновлює загальний статус заявки.
-    Ця функція повинна викликатися всередині транзакції або з переданим активним з'єднанням.
-    """
-    cur = db_connection.cursor()
-    cur.execute("""
-        SELECT COUNT(*) as total_items,
-               SUM(CASE WHEN item_status = 'виконано' THEN 1 ELSE 0 END) as completed_items,
-               SUM(CASE WHEN item_status = 'частково виконано' THEN 1 ELSE 0 END) as partially_completed_items,
-               SUM(CASE WHEN item_status = 'відхилено' THEN 1 ELSE 0 END) as rejected_items
-        FROM requisition_items
-        WHERE requisition_id = ?
-    """, (requisition_id,))
-    status_summary = cur.fetchone()
-
-    if not status_summary or status_summary['total_items'] == 0:
-        return # Немає позицій або помилка
-
-    new_overall_status = None
-    if status_summary['completed_items'] == status_summary['total_items']:
-        new_overall_status = 'виконано'
-    elif (status_summary['completed_items'] + status_summary['partially_completed_items'] + status_summary['rejected_items']) == status_summary['total_items'] and \
-         (status_summary['completed_items'] > 0 or status_summary['partially_completed_items'] > 0):
-        new_overall_status = 'частково виконано'
-    elif (status_summary['completed_items'] + status_summary['rejected_items']) == status_summary['total_items']:
-         if status_summary['completed_items'] > 0:
-             new_overall_status = 'частково виконано'
-         else:
-             new_overall_status = 'відхилено'
-
-    if new_overall_status:
-        cur.execute("UPDATE requisitions SET status = ? WHERE id = ?", (new_overall_status, requisition_id))
-
 if __name__ == '__main__':
-    print("Testing requisition handling functionality...")
-    
+    # Тестування функцій
+    conn = create_connection()
+    if conn:
+        print("\nТестування get_requisitions з фільтрами...")
+        
+        print("\nВсі заявки (перші 5):")
+        for req in get_requisitions(limit=5):
+            print(req)
+
+        print("\nЗаявки зі статусом 'схвалено':")
+        for req in get_requisitions(status='схвалено'):
+            print(req)
+
+        print("\nЗаявки з терміновістю 'термінова':")
+        for req in get_requisitions(urgency='термінова'):
+            print(req)
+        
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        one_month_ago_str = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+        print(f"\nЗаявки за останній місяць (від {one_month_ago_str} до {today_str}):")
+        for req in get_requisitions(date_from=one_month_ago_str, date_to=today_str):
+            print(req)
+
+        print("\nЗаявки, що містять слово 'навчань':")
+        for req in get_requisitions(search_term='навчань'):
+            print(req)
+
+        conn.close()
+
     # Initialize database and tables
     conn = create_connection()
     if conn:
@@ -412,8 +404,9 @@ if __name__ == '__main__':
 
     # Test requisition creation
     new_req_id = create_requisition(
+        conn,
         created_by_user_id=1,
-        department_requesting="Supply Department",
+        department="Supply Department",
         urgency='urgent',
         notes="Test requisition for functionality verification"
     )
@@ -431,17 +424,20 @@ if __name__ == '__main__':
         for item in test_items:
             name, qty, unit, res_id, justif = item
             success = add_item_to_requisition(
-                new_req_id, name, qty, unit,
-                resource_id=res_id,
-                justification=justif
+                conn,
+                new_req_id,
+                res_id,
+                name,
+                qty,
+                justif
             )
             print(f"Added item {name}: {'Success' if success else 'Failed'}")
 
         # Test getting requisition details
         print("\nRequisition details:")
-        details = get_requisition_details(new_req_id)
-        if details:
-            for key, value in details.items():
+        details = get_requisition_details(conn, new_req_id)
+        if details['requisition']:
+            for key, value in details['requisition'].items():
                 if key == 'items':
                     print("\nItems:")
                     for item in value:
@@ -453,7 +449,7 @@ if __name__ == '__main__':
         print("\nTesting status updates:")
         statuses_to_test = ['in_review', 'approved']
         for status in statuses_to_test:
-            success = update_requisition_status(new_req_id, status)
+            success = update_requisition_status(conn, new_req_id, status, 1)
             print(f"Updated status to '{status}': {'Success' if success else 'Failed'}")
 
         # Test requisition listing

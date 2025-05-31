@@ -7,9 +7,11 @@
 import os
 from datetime import datetime, date, timedelta
 from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6.QtCore import QDate
 import sqlite3
 
 from logic.db_manager import CATEGORIES, fetch_resources, create_connection
+from logic.requisition_handler import get_requisitions
 from ui.login_dialog import LoginDialog
 from ui.resource_editor_dialog import ResourceEditor
 from ui.requisition_dialog import RequisitionDialog
@@ -44,6 +46,92 @@ class MainWindow(QtWidgets.QMainWindow):
         self.main_layout.addWidget(self.tab_widget)
 
         # Вкладка "Ресурси"
+        self.setup_resources_tab()
+
+        # Вкладка "Заявки"
+        self.setup_requisitions_tab()
+
+        # Панель інструментів
+        self.setup_toolbar()
+
+        # Підключення обробника зміни вкладки
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
+
+    def setup_requisitions_tab(self):
+        """Налаштування вкладки заявок."""
+        self.requisitions_tab = QtWidgets.QWidget()
+        self.requisitions_layout = QtWidgets.QVBoxLayout(self.requisitions_tab)
+
+        # --- Секція фільтрів ---
+        self.filters_group_box = QtWidgets.QGroupBox("Фільтри та пошук заявок")
+        self.filters_layout = QtWidgets.QGridLayout()
+
+        # Фільтр за датою
+        self.filters_layout.addWidget(QtWidgets.QLabel("Дата створення від:"), 0, 0)
+        self.date_from_edit = QtWidgets.QDateEdit(self)
+        self.date_from_edit.setCalendarPopup(True)
+        self.date_from_edit.setDate(QDate.currentDate().addMonths(-1))
+        self.date_from_edit.setDisplayFormat("yyyy-MM-dd")
+        self.filters_layout.addWidget(self.date_from_edit, 0, 1)
+
+        self.filters_layout.addWidget(QtWidgets.QLabel("Дата створення до:"), 0, 2)
+        self.date_to_edit = QtWidgets.QDateEdit(self)
+        self.date_to_edit.setCalendarPopup(True)
+        self.date_to_edit.setDate(QDate.currentDate())
+        self.date_to_edit.setDisplayFormat("yyyy-MM-dd")
+        self.filters_layout.addWidget(self.date_to_edit, 0, 3)
+
+        # Фільтр за статусом
+        self.filters_layout.addWidget(QtWidgets.QLabel("Статус:"), 1, 0)
+        self.status_filter_combo = QtWidgets.QComboBox(self)
+        self.status_filter_combo.addItem("Всі статуси", None)
+        self.valid_requisition_statuses = ['нова', 'на розгляді', 'схвалено', 'відхилено', 'частково виконано', 'виконано']
+        for status in self.valid_requisition_statuses:
+            self.status_filter_combo.addItem(status.capitalize(), status)
+        self.filters_layout.addWidget(self.status_filter_combo, 1, 1)
+
+        # Фільтр за терміновістю
+        self.filters_layout.addWidget(QtWidgets.QLabel("Терміновість:"), 1, 2)
+        self.urgency_filter_combo = QtWidgets.QComboBox(self)
+        self.urgency_filter_combo.addItem("Всі терміновості", None)
+        self.valid_urgencies = ['планова', 'термінова', 'критична']
+        for urgency in self.valid_urgencies:
+            self.urgency_filter_combo.addItem(urgency.capitalize(), urgency)
+        self.filters_layout.addWidget(self.urgency_filter_combo, 1, 3)
+
+        # Пошук за номером/ключовим словом
+        self.filters_layout.addWidget(QtWidgets.QLabel("Пошук (номер/опис):"), 2, 0)
+        self.search_requisition_edit = QtWidgets.QLineEdit(self)
+        self.search_requisition_edit.setPlaceholderText("Введіть номер заявки або ключове слово...")
+        self.filters_layout.addWidget(self.search_requisition_edit, 2, 1, 1, 3)
+
+        # Кнопки для фільтрів
+        self.apply_filters_button = QtWidgets.QPushButton("Застосувати фільтри")
+        self.apply_filters_button.clicked.connect(self.apply_requisition_filters)
+        self.filters_layout.addWidget(self.apply_filters_button, 3, 0, 1, 2)
+
+        self.reset_filters_button = QtWidgets.QPushButton("Скинути фільтри")
+        self.reset_filters_button.clicked.connect(self.reset_requisition_filters)
+        self.filters_layout.addWidget(self.reset_filters_button, 3, 2, 1, 2)
+
+        self.filters_group_box.setLayout(self.filters_layout)
+        self.requisitions_layout.addWidget(self.filters_group_box)
+
+        # Таблиця для заявок
+        self.requisitions_table = QtWidgets.QTableWidget(self.requisitions_tab)
+        self.setup_requisitions_table()
+        
+        # Кнопка оновлення заявок
+        self.refresh_requisitions_button = QtWidgets.QPushButton("Оновити список заявок")
+        self.refresh_requisitions_button.clicked.connect(self.load_requisitions_data)
+        
+        self.requisitions_layout.addWidget(self.refresh_requisitions_button)
+        self.requisitions_layout.addWidget(self.requisitions_table)
+
+        self.tab_widget.addTab(self.requisitions_tab, "Заявки")
+
+    def setup_resources_tab(self):
+        """Налаштування вкладки ресурсів."""
         self.resources_tab = QtWidgets.QWidget()
         self.resources_layout = QtWidgets.QHBoxLayout(self.resources_tab)
         self.resources_layout.setContentsMargins(0, 0, 0, 0)
@@ -60,23 +148,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resources_layout.addWidget(self.preview)
 
         self.tab_widget.addTab(self.resources_tab, "Ресурси")
-
-        # Вкладка "Заявки"
-        self.requisitions_tab = QtWidgets.QWidget()
-        self.requisitions_layout = QtWidgets.QVBoxLayout(self.requisitions_tab)
-
-        # Таблиця для заявок
-        self.requisitions_table = QtWidgets.QTableWidget(self.requisitions_tab)
-        self.setup_requisitions_table()
-        
-        # Кнопка оновлення заявок
-        self.refresh_requisitions_button = QtWidgets.QPushButton("Оновити список заявок")
-        self.refresh_requisitions_button.clicked.connect(self.load_requisitions_data)
-        
-        self.requisitions_layout.addWidget(self.refresh_requisitions_button)
-        self.requisitions_layout.addWidget(self.requisitions_table)
-
-        self.tab_widget.addTab(self.requisitions_tab, "Заявки")
 
         # Створення моделей та представлень для кожної категорії
         self.models = {}
@@ -103,65 +174,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.views[cat] = view
             self.models[cat] = model
             self.stack.addWidget(view)
-
-        # Панель інструментів
-        self.setup_toolbar()
-
-        # Підключення обробника зміни вкладки
-        self.tab_widget.currentChanged.connect(self.on_tab_changed)
-
-    def setup_toolbar(self):
-        """Налаштування панелі інструментів."""
-        self.toolbar = QtWidgets.QToolBar()
-        self.addToolBar(self.toolbar)
-
-        # Пошук
-        self.toolbar.addWidget(QtWidgets.QLabel("Пошук:"))
-        self.search = QtWidgets.QLineEdit()
-        self.search.textChanged.connect(self.filter_resources)
-        self.toolbar.addWidget(self.search)
-        self.toolbar.addSeparator()
-
-        # Вибір категорії
-        self.category = QtWidgets.QComboBox()
-        self.category.addItems(CATEGORIES)
-        self.category.currentIndexChanged.connect(self.change_category)
-        self.toolbar.addWidget(self.category)
-
-        # Кнопки для адміністратора
-        if self.current_user_role == "admin":
-            self.toolbar.addAction(
-                QtGui.QAction("Додати", self, triggered=self.add_resource)
-            )
-            self.toolbar.addAction(
-                QtGui.QAction("Редагувати", self, triggered=self.edit_resource)
-            )
-            self.toolbar.addAction(
-                QtGui.QAction("Видалити", self, triggered=self.delete_resource)
-            )
-
-        # Загальні кнопки
-        self.toolbar.addAction(
-            QtGui.QAction("Інформація", self, triggered=self.show_info)
-        )
-        self.toolbar.addAction(
-            QtGui.QAction("Нова транзакція", self, triggered=self.show_transaction_dialog)
-        )
-        self.toolbar.addAction(
-            QtGui.QAction("Нова заявка", self, triggered=self.show_requisition_dialog)
-        )
-        self.toolbar.addAction(
-            QtGui.QAction("Звіт", self, triggered=self.export_report)
-        )
-        self.toolbar.addAction(
-            QtGui.QAction("Аналітика залишків", self, triggered=self.show_quantity_analytics)
-        )
-        self.toolbar.addAction(
-            QtGui.QAction("Аналітика витрат", self, triggered=self.show_cost_analytics)
-        )
-        self.toolbar.addAction(
-            QtGui.QAction("Вийти", self, triggered=self.logout)
-        )
 
     def setup_requisitions_table(self):
         """Налаштовує таблицю заявок."""
@@ -580,34 +592,117 @@ class MainWindow(QtWidgets.QMainWindow):
         if dialog.exec():
             self.load_requisitions_data()  # Оновлюємо таблицю після створення
 
-    def load_requisitions_data(self):
-        """Завантажує дані про заявки в таблицю."""
+    def apply_requisition_filters(self):
+        """Збирає дані з фільтрів та оновлює список заявок."""
+        date_from = self.date_from_edit.date().toString("yyyy-MM-dd")
+        date_to = self.date_to_edit.date().toString("yyyy-MM-dd")
+        status = self.status_filter_combo.currentData()
+        urgency = self.urgency_filter_combo.currentData()
+        search_term = self.search_requisition_edit.text().strip()
+        
+        self.load_requisitions_data(
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+            urgency=urgency,
+            search_term=search_term
+        )
+
+    def reset_requisition_filters(self):
+        """Скидає фільтри до значень за замовчуванням та оновлює список."""
+        self.date_from_edit.setDate(QDate.currentDate().addMonths(-1))
+        self.date_to_edit.setDate(QDate.currentDate())
+        self.status_filter_combo.setCurrentIndex(0)
+        self.urgency_filter_combo.setCurrentIndex(0)
+        self.search_requisition_edit.clear()
+        
+        self.load_requisitions_data()
+
+    def load_requisitions_data(self, date_from=None, date_to=None, status=None, urgency=None, search_term=None):
+        """Завантажує дані про заявки в таблицю з урахуванням фільтрів."""
         self.requisitions_table.setRowCount(0)
         
         try:
-            cur = self.conn.cursor()
-            # Отримуємо заявки з інформацією про користувача
-            cur.execute("""
-                SELECT r.*, u.username as created_by_username 
-                FROM requisitions r
-                LEFT JOIN users u ON r.created_by_user_id = u.id
-                ORDER BY r.creation_date DESC
-            """)
-            requisitions = cur.fetchall()
+            # Отримуємо заявки через функцію з requisition_handler
+            requisitions = get_requisitions(
+                date_from=date_from,
+                date_to=date_to,
+                status=status,
+                urgency=urgency,
+                search_term=search_term,
+                created_by_user_id=None if self.current_user_role == 'admin' else self.current_user_id
+            )
             
             for req in requisitions:
                 row = self.requisitions_table.rowCount()
                 self.requisitions_table.insertRow(row)
                 
-                # Заповнюємо дані
                 self.requisitions_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(req['id'])))
                 self.requisitions_table.setItem(row, 1, QtWidgets.QTableWidgetItem(req['requisition_number']))
                 self.requisitions_table.setItem(row, 2, QtWidgets.QTableWidgetItem(req['creation_date']))
                 self.requisitions_table.setItem(row, 3, QtWidgets.QTableWidgetItem(req['department_requesting']))
-                self.requisitions_table.setItem(row, 4, QtWidgets.QTableWidgetItem(req['created_by_username']))
-                self.requisitions_table.setItem(row, 5, QtWidgets.QTableWidgetItem(req['status']))
-                self.requisitions_table.setItem(row, 6, QtWidgets.QTableWidgetItem(req['urgency']))
+                self.requisitions_table.setItem(row, 4, QtWidgets.QTableWidgetItem(req['created_by']))
+                self.requisitions_table.setItem(row, 5, QtWidgets.QTableWidgetItem(req['status'].capitalize()))
+                self.requisitions_table.setItem(row, 6, QtWidgets.QTableWidgetItem(req['urgency'].capitalize()))
                 self.requisitions_table.setItem(row, 7, QtWidgets.QTableWidgetItem(req['notes'] or ''))
                 
-        except sqlite3.Error as e:
-            print(f"Помилка завантаження заявок: {e}") 
+        except Exception as e:
+            print(f"Помилка завантаження заявок: {e}")
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Помилка",
+                f"Не вдалося завантажити список заявок: {str(e)}"
+            )
+
+    def setup_toolbar(self):
+        """Налаштування панелі інструментів."""
+        self.toolbar = QtWidgets.QToolBar()
+        self.addToolBar(self.toolbar)
+
+        # Пошук
+        self.toolbar.addWidget(QtWidgets.QLabel("Пошук:"))
+        self.search = QtWidgets.QLineEdit()
+        self.search.textChanged.connect(self.filter_resources)
+        self.toolbar.addWidget(self.search)
+        self.toolbar.addSeparator()
+
+        # Вибір категорії
+        self.category = QtWidgets.QComboBox()
+        self.category.addItems(CATEGORIES)
+        self.category.currentIndexChanged.connect(self.change_category)
+        self.toolbar.addWidget(self.category)
+
+        # Кнопки для адміністратора
+        if self.current_user_role == "admin":
+            self.toolbar.addAction(
+                QtGui.QAction("Додати", self, triggered=self.add_resource)
+            )
+            self.toolbar.addAction(
+                QtGui.QAction("Редагувати", self, triggered=self.edit_resource)
+            )
+            self.toolbar.addAction(
+                QtGui.QAction("Видалити", self, triggered=self.delete_resource)
+            )
+
+        # Загальні кнопки
+        self.toolbar.addAction(
+            QtGui.QAction("Інформація", self, triggered=self.show_info)
+        )
+        self.toolbar.addAction(
+            QtGui.QAction("Нова транзакція", self, triggered=self.show_transaction_dialog)
+        )
+        self.toolbar.addAction(
+            QtGui.QAction("Нова заявка", self, triggered=self.show_requisition_dialog)
+        )
+        self.toolbar.addAction(
+            QtGui.QAction("Звіт", self, triggered=self.export_report)
+        )
+        self.toolbar.addAction(
+            QtGui.QAction("Аналітика залишків", self, triggered=self.show_quantity_analytics)
+        )
+        self.toolbar.addAction(
+            QtGui.QAction("Аналітика витрат", self, triggered=self.show_cost_analytics)
+        )
+        self.toolbar.addAction(
+            QtGui.QAction("Вийти", self, triggered=self.logout)
+        ) 
