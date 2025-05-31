@@ -50,7 +50,7 @@ QTableView::item:selected { background:#B8C65E; color:#000; }
 # ------------------------ DATABASE ---------------------------
 # =============================================================
 
-DB_NAME = "military_resources.db"
+DB_NAME = "military_resource_app/resources.db"
 
 CATEGORIES = [
     "Продукти харчування",

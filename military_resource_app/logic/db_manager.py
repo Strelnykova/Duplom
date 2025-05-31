@@ -8,8 +8,8 @@ import os
 import sqlite3
 from datetime import datetime
 
-# Змінюємо шлях до бази даних
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources.db")
+# Змінюємо шлях до бази даних на абсолютний
+DB_PATH = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources.db"))
 
 CATEGORIES = [
     "Продукти харчування",
@@ -27,12 +27,16 @@ def create_connection(db_file=DB_PATH):
     """Створює з'єднання з базою даних."""
     conn = None
     try:
+        print(f"Спроба підключення до бази даних: {db_file}")
         conn = sqlite3.connect(db_file)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
+        print("З'єднання успішно встановлено")
         return conn
     except sqlite3.Error as e:
         print(f"Помилка підключення до БД: {e}")
+    except Exception as e:
+        print(f"Неочікувана помилка: {e}")
     return conn
 
 def create_tables(conn):
