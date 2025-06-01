@@ -157,7 +157,19 @@ class TransactionDialog(QtWidgets.QDialog):
         show_department = transaction_type in ('видача', 'повернення')
         self.department.setEnabled(show_department)
         self.department.setVisible(show_department)
-        self.layout().labelForField(self.department).setVisible(show_department)
+        
+        # Find the label for department field
+        form_layout = None
+        for i in range(self.layout().count()):
+            item = self.layout().itemAt(i)
+            if isinstance(item.layout(), QtWidgets.QFormLayout):
+                form_layout = item.layout()
+                break
+                
+        if form_layout:
+            label_item = form_layout.itemAt(form_layout.getWidgetPosition(self.department)[0], QtWidgets.QFormLayout.ItemRole.LabelRole)
+            if label_item and label_item.widget():
+                label_item.widget().setVisible(show_department)
 
     def update_info_label(self):
         """Оновлення інформації про наявність ресурсу."""

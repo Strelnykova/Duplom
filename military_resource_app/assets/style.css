@@ -5,42 +5,42 @@
 
 /* Головне вікно та діалоги */
 QMainWindow, QDialog { 
-    background: #3B5323; 
-    color: #FFD700; 
+    background: #FFFFFF; 
+    color: #000000; 
 }
 
 /* Панелі інструментів та меню */
 QToolBar, QMenuBar, QStatusBar { 
-    background: #3B5323; 
+    background: #FFFFFF; 
     spacing: 8px; 
 }
 
 /* Текстові мітки */
 QLabel { 
-    color: #FFD700; 
+    color: #000000; 
 }
 
 /* Кнопки */
 QPushButton, QToolButton {
-    background: #FFD700;
-    color: #000;
-    border: 1px solid #302B00;
+    background: #F0F0F0;
+    color: #000000;
+    border: 1px solid #A0A0A0;
     border-radius: 4px;
     padding: 4px 12px;
 }
 
 QPushButton:hover, QToolButton:hover {
-    background: #FFE54A;
+    background: #E0E0E0;
 }
 
 QPushButton:pressed, QToolButton:pressed {
-    background: #FFC107;
+    background: #D0D0D0;
 }
 
 /* Поля вводу */
-QLineEdit, QSpinBox, QComboBox {
+QLineEdit, QSpinBox, QComboBox, QTextEdit {
     background: #FFFFFF;
-    color: #000;
+    color: #000000;
     border: 1px solid #A0A0A0;
     border-radius: 4px;
     padding: 2px 4px;
@@ -48,8 +48,8 @@ QLineEdit, QSpinBox, QComboBox {
 
 /* Заголовки таблиць */
 QHeaderView::section {
-    background: #556B2F;
-    color: #FFD700;
+    background: #F0F0F0;
+    color: #000000;
     font-weight: bold;
     border: none;
     padding: 4px;
@@ -63,13 +63,28 @@ QTableView {
 }
 
 QTableView::item:selected {
-    background: #B8C65E;
-    color: #000;
+    background: #E0E0E0;
+    color: #000000;
 }
 
 /* Попередній перегляд */
 #previewLabel {
-    background: #3B5323;
-    border: 2px dashed #FFD700;
-    color: #FFD700;
+    background: #FFFFFF;
+    border: 2px dashed #A0A0A0;
+    color: #000000;
+}
+
+/* Меню */
+QMenu {
+    background: #FFFFFF;
+    color: #000000;
+}
+
+QMenu::item:selected {
+    background: #E0E0E0;
+}
+
+/* Статус бар */
+QStatusBar {
+    color: #000000;
 } 
