@@ -43,7 +43,11 @@ def main():
         return 0
 
     # Створення та показ головного вікна
-    window = MainWindow(login.conn, login.user_role, login.user_id)
+    window = MainWindow(
+        conn=login.conn,
+        role=login.user_role,
+        user_id=login.user_id
+    )
     window.show()
 
     # Запуск циклу подій
