@@ -52,7 +52,12 @@ def create_tables(conn):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
                 password TEXT NOT NULL,
-                role TEXT NOT NULL CHECK(role IN ('admin', 'user'))
+                role TEXT NOT NULL CHECK(role IN ('admin', 'user')),
+                rank TEXT,
+                last_name TEXT,
+                first_name TEXT,
+                middle_name TEXT,
+                position TEXT
             );
 
             CREATE TABLE IF NOT EXISTS categories (
@@ -133,8 +138,12 @@ def create_tables(conn):
         cur.execute("SELECT COUNT(*) FROM users")
         if cur.fetchone()[0] == 0:
             cur.executemany(
-                "INSERT INTO users(username, password, role) VALUES(?,?,?)",
-                [("admin", "admin", "admin"), ("user", "user", "user")]
+                """INSERT INTO users(username, password, role, rank, last_name, first_name, middle_name, position) 
+                VALUES(?,?,?,?,?,?,?,?)""",
+                [
+                    ("admin", "admin", "admin", "Майор", "Петренко", "Іван", "Васильович", "Начальник складу"),
+                    ("user", "user", "user", "Сержант", "Іваненко", "Петро", "Миколайович", "Комірник")
+                ]
             )
             conn.commit()
             print("Початкових користувачів додано.")

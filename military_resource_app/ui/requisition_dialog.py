@@ -145,14 +145,10 @@ class RequisitionDialog(QtWidgets.QDialog):
         if selected_data: # Якщо вибрано існуючий ресурс
             self.unit_of_measure_edit.setText(selected_data.get('unit_of_measure', ''))
             self.unit_of_measure_edit.setReadOnly(True) # Блокуємо редагування, якщо з довідника
-            self.requested_resource_name_edit.setText(selected_data.get('name', '')) # Заповнюємо назву
-            self.requested_resource_name_edit.setReadOnly(True)
         else:
             # Якщо користувач вводить текст, який не відповідає жодному ресурсу
             self.unit_of_measure_edit.clear()
             self.unit_of_measure_edit.setReadOnly(False)
-            self.requested_resource_name_edit.setText(text) # Дозволяємо вводити свою назву
-            self.requested_resource_name_edit.setReadOnly(False)
 
 
     def load_resources_for_combo(self):
@@ -233,12 +229,10 @@ class RequisitionDialog(QtWidgets.QDialog):
 
         # Очищення полів форми додавання позиції
         self.resource_search_combo.setCurrentIndex(0) # Скидаємо вибір
-        self.requested_resource_name_edit.clear()
         self.quantity_requested_spinbox.setValue(1)
         self.unit_of_measure_edit.clear()
         self.justification_edit.clear()
         self.unit_of_measure_edit.setReadOnly(False) # Розблоковуємо, якщо було заблоковано
-        self.requested_resource_name_edit.setReadOnly(False)
 
 
     def accept_requisition(self):
