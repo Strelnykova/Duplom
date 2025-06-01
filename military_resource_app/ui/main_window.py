@@ -176,10 +176,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.create_requisition_action.setEnabled(False)
 
         self.add_transaction_action = QtGui.QAction("Нова транзакція", self)
+        icon_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'icons', 'transaction_icon.png')
+        if os.path.exists(icon_path):
+            self.add_transaction_action.setIcon(QtGui.QIcon(icon_path))
+        self.add_transaction_action.setToolTip("Зареєструвати надходження, видачу або списання ресурсу")
         if hasattr(self, 'show_transaction_dialog'):
             self.add_transaction_action.triggered.connect(self.show_transaction_dialog)
         else:
             self.add_transaction_action.setEnabled(False)
+            print("УВАГА: Метод show_transaction_dialog не реалізовано в MainWindow!")
 
     def _setup_header_and_tabs_by_role(self):
         """Налаштовує хедер (панель дій) та вкладки відповідно до ролі."""
@@ -572,9 +577,29 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
             
-        dialog = TransactionDialog(self.user_id)
-        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            self.load_resources_data()
+        try:
+            dialog = TransactionDialog(self.user_id, parent=self)
+            if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                print("Транзакція успішно створена")
+                # Оновлюємо дані на активній вкладці
+                current_widget = self.tab_widget.currentWidget()
+                if current_widget == self.resources_tab:
+                    category_id = self.category_filter.currentData()
+                    stock_status = self.stock_filter.currentText()
+                    self.load_resources_data(category_id, stock_status)
+                elif current_widget == self.analytics_tab:
+                    self.load_analytics_data()
+                elif current_widget == self.reports_tab:
+                    self.load_reports_data()
+            else:
+                print("Діалог транзакції скасовано або закрито")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Помилка",
+                f"Не вдалося створити транзакцію: {str(e)}"
+            )
+            print(f"Помилка при створенні транзакції: {e}")
 
     # Методи для завантаження даних
     def load_requisitions_data(self):

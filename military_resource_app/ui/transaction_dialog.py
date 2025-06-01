@@ -1,251 +1,296 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Діалог для створення нової транзакції.
+Діалог для створення та редагування транзакцій ресурсів.
 """
 
+import sys
+import os
 from datetime import datetime
-from typing import Dict, Optional
-
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from logic.db_manager import CATEGORIES
-from logic.transaction_handler import TransactionHandler, TransactionError
+# Налаштування шляху для імпорту модулів
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from logic.db_manager import create_connection
 
 class TransactionDialog(QtWidgets.QDialog):
-    def __init__(
-        self,
-        conn,
-        user_id: int,
-        resource_id: Optional[int] = None,
-        category: Optional[str] = None
-    ):
-        super().__init__()
-        self.conn = conn
-        self.user_id = user_id
-        self.resource_id = resource_id
-        self.category = category
-        self.transaction_handler = TransactionHandler(conn)
+    def __init__(self, current_user_id: int, parent=None):
+        super().__init__(parent)
+        self.current_user_id = current_user_id
+        self.setWindowTitle("Реєстрація транзакції")
+        self.setModal(True)
+        self.resize(500, 400)
         
-        self.setup_ui()
-        if resource_id:
-            self.load_resource_data()
+        self._setup_ui()
+        self._load_resources_data()
+        self._setup_connections()
 
-    def setup_ui(self):
-        """Налаштування інтерфейсу."""
-        self.setWindowTitle("Нова транзакція")
-        self.setMinimumWidth(400)
-
+    def _setup_ui(self):
+        """Налаштовує інтерфейс користувача."""
         layout = QtWidgets.QVBoxLayout(self)
+        
+        # Група для типу транзакції
+        transaction_type_group = QtWidgets.QGroupBox("Тип транзакції")
+        transaction_type_layout = QtWidgets.QHBoxLayout()
+        
+        self.transaction_type_combo = QtWidgets.QComboBox()
+        self.transaction_type_combo.addItems(["Надходження", "Видача", "Списання"])
+        transaction_type_layout.addWidget(QtWidgets.QLabel("Тип:"))
+        transaction_type_layout.addWidget(self.transaction_type_combo)
+        transaction_type_group.setLayout(transaction_type_layout)
+        layout.addWidget(transaction_type_group)
 
-        # Форма
-        form = QtWidgets.QFormLayout()
-
-        # Категорія
+        # Група для вибору ресурсу
+        resource_group = QtWidgets.QGroupBox("Ресурс")
+        resource_layout = QtWidgets.QGridLayout()
+        
+        # Комбо-бокс для категорій
         self.category_combo = QtWidgets.QComboBox()
-        self.category_combo.addItems(CATEGORIES)
-        if self.category:
-            self.category_combo.setCurrentText(self.category)
-        self.category_combo.currentIndexChanged.connect(self.load_resources)
-        form.addRow("Категорія:", self.category_combo)
-
-        # Ресурс
+        resource_layout.addWidget(QtWidgets.QLabel("Категорія:"), 0, 0)
+        resource_layout.addWidget(self.category_combo, 0, 1)
+        
+        # Комбо-бокс для ресурсів
         self.resource_combo = QtWidgets.QComboBox()
-        form.addRow("Ресурс:", self.resource_combo)
+        resource_layout.addWidget(QtWidgets.QLabel("Ресурс:"), 1, 0)
+        resource_layout.addWidget(self.resource_combo, 1, 1)
+        
+        # Поле для кількості
+        self.quantity_spin = QtWidgets.QSpinBox()
+        self.quantity_spin.setMinimum(1)
+        self.quantity_spin.setMaximum(9999)
+        resource_layout.addWidget(QtWidgets.QLabel("Кількість:"), 2, 0)
+        resource_layout.addWidget(self.quantity_spin, 2, 1)
+        
+        resource_group.setLayout(resource_layout)
+        layout.addWidget(resource_group)
 
-        # Тип транзакції
-        self.type_combo = QtWidgets.QComboBox()
-        self.type_combo.addItems(TransactionHandler.VALID_TRANSACTION_TYPES.keys())
-        self.type_combo.currentTextChanged.connect(self.on_type_changed)
-        form.addRow("Тип:", self.type_combo)
-
-        # Кількість
-        self.quantity = QtWidgets.QSpinBox()
-        self.quantity.setRange(1, 1_000_000)
-        self.quantity.setValue(1)
-        form.addRow("Кількість:", self.quantity)
-
-        # Підрозділ-отримувач
-        self.department = QtWidgets.QComboBox()
-        self.department.setEditable(True)
-        self.department.addItems(self.load_departments())
-        form.addRow("Підрозділ:", self.department)
-
-        # Дата
-        self.date = QtWidgets.QDateTimeEdit(QtCore.QDateTime.currentDateTime())
-        self.date.setCalendarPopup(True)
-        form.addRow("Дата:", self.date)
-
-        # Примітки
-        self.notes = QtWidgets.QTextEdit()
-        self.notes.setMaximumHeight(100)
-        form.addRow("Примітки:", self.notes)
-
-        layout.addLayout(form)
-
-        # Інформація про наявність
-        self.info_label = QtWidgets.QLabel()
-        self.info_label.setStyleSheet("color: #FFD700;")
-        layout.addWidget(self.info_label)
+        # Група для додаткової інформації
+        details_group = QtWidgets.QGroupBox("Додаткова інформація")
+        details_layout = QtWidgets.QGridLayout()
+        
+        # Поле для відділу/отримувача
+        self.department_edit = QtWidgets.QLineEdit()
+        details_layout.addWidget(QtWidgets.QLabel("Відділ/Отримувач:"), 0, 0)
+        details_layout.addWidget(self.department_edit, 0, 1)
+        
+        # Поле для документа-підстави
+        self.document_edit = QtWidgets.QLineEdit()
+        details_layout.addWidget(QtWidgets.QLabel("Документ-підстава:"), 1, 0)
+        details_layout.addWidget(self.document_edit, 1, 1)
+        
+        # Поле для приміток
+        self.notes_edit = QtWidgets.QTextEdit()
+        self.notes_edit.setMaximumHeight(60)
+        details_layout.addWidget(QtWidgets.QLabel("Примітки:"), 2, 0)
+        details_layout.addWidget(self.notes_edit, 2, 1)
+        
+        details_group.setLayout(details_layout)
+        layout.addWidget(details_group)
 
         # Кнопки
-        buttons = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.StandardButton.Ok |
+        button_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok | 
             QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self.validate_and_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
 
-        # Завантаження ресурсів
-        self.load_resources()
+    def _setup_connections(self):
+        """Налаштовує з'єднання сигналів і слотів."""
+        self.category_combo.currentIndexChanged.connect(self._on_category_changed)
+        self.transaction_type_combo.currentIndexChanged.connect(self._on_transaction_type_changed)
 
-    def load_departments(self) -> list:
-        """Завантаження списку підрозділів з історії транзакцій."""
-        departments = self.conn.execute("""
-            SELECT DISTINCT recipient_department
-            FROM resource_transactions
-            WHERE recipient_department IS NOT NULL
-            ORDER BY recipient_department
-        """).fetchall()
-        return [d["recipient_department"] for d in departments]
-
-    def load_resources(self):
-        """Завантаження списку ресурсів для вибраної категорії."""
-        self.resource_combo.clear()
-        
-        category = self.category_combo.currentText()
-        resources = self.conn.execute("""
-            SELECT r.id, r.name, r.quantity, r.unit_of_measure
-            FROM resources r
-            JOIN categories c ON r.category_id = c.id
-            WHERE c.name = ?
-            ORDER BY r.name
-        """, (category,)).fetchall()
-
-        for r in resources:
-            self.resource_combo.addItem(
-                f"{r['name']} ({r['quantity']} {r['unit_of_measure']})",
-                r["id"]
-            )
-
-        if self.resource_id:
-            index = self.resource_combo.findData(self.resource_id)
-            if index >= 0:
-                self.resource_combo.setCurrentIndex(index)
-
-        self.update_info_label()
-        
-    def load_resource_data(self):
-        """Завантаження даних про конкретний ресурс."""
-        resource = self.conn.execute("""
-            SELECT r.*, c.name as category_name
-            FROM resources r
-            JOIN categories c ON r.category_id = c.id
-            WHERE r.id = ?
-        """, (self.resource_id,)).fetchone()
-
-        if resource:
-            index = self.category_combo.findText(resource["category_name"])
-            if index >= 0:
-                self.category_combo.setCurrentIndex(index)
-                self.load_resources()
-
-    def on_type_changed(self, transaction_type: str):
-        """Обробка зміни типу транзакції."""
-        # Показуємо/приховуємо поле підрозділу
-        show_department = transaction_type in ('видача', 'повернення')
-        self.department.setEnabled(show_department)
-        self.department.setVisible(show_department)
-        
-        # Find the label for department field
-        form_layout = None
-        for i in range(self.layout().count()):
-            item = self.layout().itemAt(i)
-            if isinstance(item.layout(), QtWidgets.QFormLayout):
-                form_layout = item.layout()
-                break
-                
-        if form_layout:
-            label_item = form_layout.itemAt(form_layout.getWidgetPosition(self.department)[0], QtWidgets.QFormLayout.ItemRole.LabelRole)
-            if label_item and label_item.widget():
-                label_item.widget().setVisible(show_department)
-
-    def update_info_label(self):
-        """Оновлення інформації про наявність ресурсу."""
-        resource_id = self.resource_combo.currentData()
-        if not resource_id:
-            self.info_label.clear()
-            return
-
-        resource = self.conn.execute("""
-            SELECT name, quantity, unit_of_measure, low_stock_threshold
-            FROM resources
-            WHERE id = ?
-        """, (resource_id,)).fetchone()
-
-        if resource:
-            status = (
-                "Критично мало"
-                if resource["quantity"] < resource["low_stock_threshold"]
-                else "Достатньо"
-            )
-            self.info_label.setText(
-                f"В наявності: {resource['quantity']} {resource['unit_of_measure']} "
-                f"({status})"
-            )
-
-    def validate_and_accept(self):
-        """Перевірка та збереження транзакції."""
-        resource_id = self.resource_combo.currentData()
-        if not resource_id:
-            QtWidgets.QMessageBox.warning(self, "Помилка", "Виберіть ресурс")
-            return
-
-        transaction_type = self.type_combo.currentText()
-        if transaction_type in ('видача', 'повернення'):
-            department = self.department.currentText().strip()
-            if not department:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Помилка",
-                    "Вкажіть підрозділ"
-                )
-                return
-        else:
-            department = None
-
+    def _load_resources_data(self):
+        """Завантажує дані про категорії та ресурси."""
+        conn = None
         try:
-            success, message = self.transaction_handler.add_transaction(
-                resource_id=resource_id,
-                transaction_type=transaction_type,
-                quantity_changed=self.quantity.value(),
-                issued_by_user_id=self.user_id,
-                recipient_department=department,
-                notes=self.notes.toPlainText().strip() or None,
-                transaction_date=self.date.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+            conn = create_connection()
+            if conn:
+                # Завантаження категорій
+                cur = conn.cursor()
+                cur.execute("SELECT id, name FROM categories ORDER BY name")
+                categories = cur.fetchall()
+                
+                self.category_combo.clear()
+                self.category_combo.addItem("Оберіть категорію", None)
+                for category in categories:
+                    self.category_combo.addItem(category['name'], category['id'])
+                
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Помилка",
+                f"Помилка завантаження даних: {str(e)}"
             )
+        finally:
+            if conn:
+                conn.close()
 
-            if success:
-                self.accept()
-            else:
-                QtWidgets.QMessageBox.warning(self, "Помилка", message)
+    def _on_category_changed(self, index):
+        """Обробник зміни вибраної категорії."""
+        category_id = self.category_combo.currentData()
+        self._load_resources_for_category(category_id)
 
-        except TransactionError as e:
-            QtWidgets.QMessageBox.warning(self, "Помилка", str(e))
+    def _load_resources_for_category(self, category_id):
+        """Завантажує ресурси для вибраної категорії."""
+        if not category_id:
+            self.resource_combo.clear()
+            return
 
-    def get_data(self) -> Dict:
-        """Отримання даних транзакції."""
-        return {
-            "resource_id": self.resource_combo.currentData(),
-            "resource_name": self.resource_combo.currentText().split(" (")[0],
-            "transaction_type": self.type_combo.currentText(),
-            "quantity": self.quantity.value(),
-            "department": (
-                self.department.currentText().strip()
-                if self.department.isEnabled()
-                else None
-            ),
-            "date": self.date.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
-            "notes": self.notes.toPlainText().strip() or None
-        } 
+        conn = None
+        try:
+            conn = create_connection()
+            if conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT id, name, quantity, unit_of_measure 
+                    FROM resources 
+                    WHERE category_id = ?
+                    ORDER BY name
+                """, (category_id,))
+                resources = cur.fetchall()
+                
+                self.resource_combo.clear()
+                self.resource_combo.addItem("Оберіть ресурс", None)
+                for resource in resources:
+                    display_text = f"{resource['name']} ({resource['quantity']} {resource['unit_of_measure']})"
+                    self.resource_combo.addItem(display_text, resource['id'])
+                
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Помилка",
+                f"Помилка завантаження ресурсів: {str(e)}"
+            )
+        finally:
+            if conn:
+                conn.close()
+
+    def _on_transaction_type_changed(self, index):
+        """Обробник зміни типу транзакції."""
+        transaction_type = self.transaction_type_combo.currentText()
+        
+        # Налаштування полів відповідно до типу транзакції
+        if transaction_type == "Надходження":
+            self.department_edit.setPlaceholderText("Постачальник")
+            self.document_edit.setPlaceholderText("Номер накладної")
+        elif transaction_type == "Видача":
+            self.department_edit.setPlaceholderText("Відділ/Отримувач")
+            self.document_edit.setPlaceholderText("Номер вимоги")
+        else:  # Списання
+            self.department_edit.setPlaceholderText("Підрозділ")
+            self.document_edit.setPlaceholderText("Номер акту списання")
+
+    def accept(self):
+        """Обробляє підтвердження діалогу."""
+        # Перевірка введених даних
+        if not self._validate_input():
+            return
+        
+        # Збереження транзакції
+        if self._save_transaction():
+            super().accept()
+        
+    def _validate_input(self) -> bool:
+        """Перевіряє коректність введених даних."""
+        if not self.resource_combo.currentData():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Помилка валідації",
+                "Будь ласка, оберіть ресурс"
+            )
+            return False
+            
+        if not self.department_edit.text().strip():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Помилка валідації",
+                "Будь ласка, вкажіть відділ/отримувача"
+            )
+            return False
+            
+        if not self.document_edit.text().strip():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Помилка валідації",
+                "Будь ласка, вкажіть документ-підставу"
+            )
+            return False
+            
+        return True
+
+    def _save_transaction(self) -> bool:
+        """Зберігає транзакцію в базу даних."""
+        conn = None
+        try:
+            conn = create_connection()
+            if not conn:
+                return False
+
+            cur = conn.cursor()
+            
+            # Отримуємо дані для транзакції
+            resource_id = self.resource_combo.currentData()
+            quantity = self.quantity_spin.value()
+            transaction_type = self.transaction_type_combo.currentText().lower()
+            
+            # Перевіряємо наявність достатньої кількості ресурсу для видачі/списання
+            if transaction_type in ['видача', 'списання']:
+                cur.execute("SELECT quantity FROM resources WHERE id = ?", (resource_id,))
+                current_quantity = cur.fetchone()['quantity']
+                if current_quantity < quantity:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Помилка",
+                        f"Недостатньо ресурсу. Доступно: {current_quantity}"
+                    )
+                    return False
+
+            # Зберігаємо транзакцію
+            cur.execute("""
+                INSERT INTO transactions (
+                    resource_id, transaction_type, quantity, 
+                    department, document_number, notes, 
+                    created_by_user_id, transaction_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (
+                resource_id,
+                transaction_type,
+                quantity,
+                self.department_edit.text().strip(),
+                self.document_edit.text().strip(),
+                self.notes_edit.toPlainText().strip(),
+                self.current_user_id
+            ))
+            
+            # Оновлюємо кількість ресурсу
+            if transaction_type == 'надходження':
+                cur.execute("""
+                    UPDATE resources 
+                    SET quantity = quantity + ? 
+                    WHERE id = ?
+                """, (quantity, resource_id))
+            else:  # видача або списання
+                cur.execute("""
+                    UPDATE resources 
+                    SET quantity = quantity - ? 
+                    WHERE id = ?
+                """, (quantity, resource_id))
+            
+            conn.commit()
+            return True
+            
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Помилка",
+                f"Помилка збереження транзакції: {str(e)}"
+            )
+            return False
+            
+        finally:
+            if conn:
+                conn.close() 
