@@ -236,61 +236,85 @@ class RequisitionDialog(QtWidgets.QDialog):
 
 
     def accept_requisition(self):
-        """Створює заявку та додає до неї всі позиції з таблиці."""
-        department = self.department_edit.text().strip()
-        urgency = self.urgency_combo.currentText()
-        notes = self.notes_edit.toPlainText().strip()
+        """Створює нову заявку з введеними даними."""
+        try:
+            # Перевірка введених даних
+            department = self.department_edit.text().strip()
+            if not department:
+                QtWidgets.QMessageBox.warning(self, "Помилка валідації",
+                                            "Будь ласка, вкажіть відділення")
+                return
 
-        if not department:
-            QtWidgets.QMessageBox.warning(self, "Помилка вводу", "Будь ласка, вкажіть відділення, що подає заявку.")
-            return
+            if self.items_table.rowCount() == 0:
+                QtWidgets.QMessageBox.warning(self, "Помилка валідації",
+                                            "Додайте хоча б одну позицію до заявки")
+                return
 
-        if self.items_table.rowCount() == 0:
-            QtWidgets.QMessageBox.warning(self, "Помилка вводу", "Будь ласка, додайте хоча б одну позицію до заявки.")
-            return
+            # Створюємо з'єднання з БД
+            conn = create_connection()
+            if not conn:
+                QtWidgets.QMessageBox.critical(self, "Помилка з'єднання",
+                                             "Не вдалося підключитися до бази даних")
+                return
 
-        # 1. Створюємо саму заявку
-        self.new_requisition_id = create_requisition(
-            created_by_user_id=self.current_user_id,
-            department_requesting=department,
-            urgency=urgency,
-            notes=notes
-        )
-
-        if not self.new_requisition_id:
-            QtWidgets.QMessageBox.critical(self, "Помилка", "Не вдалося створити заявку. Дивіться консоль.")
-            return
-
-        # 2. Додаємо всі позиції до створеної заявки
-        all_items_added = True
-        for row in range(self.items_table.rowCount()):
-            item_data_in_cell = self.items_table.item(row, 0).data(QtCore.Qt.ItemDataRole.UserRole)
-            if not item_data_in_cell:
-                QtWidgets.QMessageBox.warning(self, "Помилка даних", f"Помилка отримання даних для позиції в рядку {row+1}")
-                all_items_added = False
-                break
-
-            if not add_item_to_requisition(
-                requisition_id=self.new_requisition_id,
-                requested_resource_name=item_data_in_cell['name'],
-                quantity_requested=item_data_in_cell['qty'],
-                unit_of_measure=item_data_in_cell['unit'],
-                resource_id=item_data_in_cell['id_linked'],
-                justification=item_data_in_cell['just']
-            ):
-                all_items_added = False
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Помилка додавання позиції",
-                    f"Не вдалося додати: {item_data_in_cell['name']}"
+            try:
+                # Створюємо заявку
+                requisition_id = create_requisition(
+                    conn=conn,
+                    user_id=self.current_user_id,
+                    department=department,
+                    urgency=self.urgency_combo.currentText(),
+                    notes=self.notes_edit.toPlainText().strip()
                 )
-                break
 
-        if all_items_added:
-            QtWidgets.QMessageBox.information(self, "Успіх", f"Заявку (ID: {self.new_requisition_id}) та всі її позиції успішно створено.")
-            self.accept()
-        # Якщо не всі позиції додано, діалог не закриваємо автоматично,
-        # користувач бачить повідомлення про помилку.
+                if not requisition_id:
+                    QtWidgets.QMessageBox.critical(self, "Помилка створення",
+                                                 "Не вдалося створити заявку")
+                    return
+
+                # Додаємо позиції до заявки
+                for row in range(self.items_table.rowCount()):
+                    # Отримуємо дані з UserRole першої колонки
+                    item_data = self.items_table.item(row, 0).data(QtCore.Qt.ItemDataRole.UserRole)
+                    if not item_data:
+                        raise Exception(f"Помилка отримання даних для позиції {row + 1}")
+
+                    print(f"[DEBUG] Дані позиції для додавання:")
+                    print(f"[DEBUG] {item_data}")
+
+                    success = add_item_to_requisition(
+                        conn=conn,
+                        requisition_id=requisition_id,
+                        resource_id=item_data['id_linked'],
+                        resource_name=item_data['name'],
+                        quantity_requested=item_data['qty'],
+                        notes=item_data['just']
+                    )
+
+                    if not success:
+                        raise Exception(f"Не вдалося додати позицію '{item_data['name']}' до заявки")
+
+                conn.commit()
+                self.new_requisition_id = requisition_id
+                self.successfully_saved_status = True
+                QtWidgets.QMessageBox.information(self, "Успіх", 
+                                                f"Заявку успішно створено (ID: {requisition_id})")
+                super().accept()  # Закриваємо діалог тільки після успішного збереження
+
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Помилка",
+                                             f"Помилка при створенні заявки: {str(e)}")
+                if conn:
+                    conn.rollback()
+                return
+            finally:
+                if conn:
+                    conn.close()
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Помилка",
+                                         f"Неочікувана помилка: {str(e)}")
+            return
 
     def load_data_for_view(self):
         """Завантажує дані заявки для режиму перегляду."""

@@ -603,96 +603,64 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # Методи для завантаження даних
     def load_requisitions_data(self):
-        """Завантажує дані про заявки."""
-        print("Завантаження даних заявок...")
-        
-        # Створюємо модель для таблиці, якщо її ще немає
-        if not hasattr(self, 'requisitions_model'):
-            self.requisitions_model = QtGui.QStandardItemModel(self)
-            self.requisitions_model.setHorizontalHeaderLabels([
-                "ID", "Номер", "Відділення", "Дата створення", 
-                "Статус", "Терміновість", "Примітки"
-            ])
-            self.requisitions_table.setModel(self.requisitions_model)
-            
-            # Налаштовуємо розміри стовпців
-            self.requisitions_table.setColumnWidth(0, 50)   # ID
-            self.requisitions_table.setColumnWidth(1, 120)  # Номер
-            self.requisitions_table.setColumnWidth(2, 150)  # Відділення
-            self.requisitions_table.setColumnWidth(3, 120)  # Дата
-            self.requisitions_table.setColumnWidth(4, 100)  # Статус
-            self.requisitions_table.setColumnWidth(5, 100)  # Терміновість
-            self.requisitions_table.setColumnWidth(6, 200)  # Примітки
-
-            # Підключаємо подвійний клік для перегляду деталей
-            self.requisitions_table.doubleClicked.connect(self.on_requisition_double_clicked)
-
-        # Очищаємо модель перед завантаженням нових даних
-        self.requisitions_model.setRowCount(0)
-
-        # Отримуємо фільтри
-        status_filter = self.status_filter.currentText()
-        if status_filter == "Всі статуси":
-            status_filter = None
-
-        # Отримуємо дані заявок
-        conn = create_connection()
-        if not conn:
-            return
-
+        """Завантажує дані про заявки з бази даних."""
         try:
-            cur = conn.cursor()
-            query = """
-                SELECT r.id, r.requisition_number, r.department_requesting,
-                       r.creation_date, r.status, r.urgency, r.notes
-                FROM requisitions r
-                WHERE 1=1
-            """
-            params = []
-
-            if status_filter:
-                query += " AND r.status = ?"
-                params.append(status_filter.lower())
-
+            print("[DEBUG] Початок завантаження заявок")
+            print(f"[DEBUG] Поточний користувач: ID={self.user_id}, роль={self.role}")
+            
+            # Отримуємо значення фільтрів
+            current_user_filter_id_for_query = None
             if self.role != 'admin':
-                query += " AND r.created_by_user_id = ?"
-                params.append(self.user_id)
-
-            query += " ORDER BY r.creation_date DESC"
-
-            cur.execute(query, params)
-            requisitions = cur.fetchall()
-
-            for req in requisitions:
-                row_items = [
-                    QtGui.QStandardItem(str(req['id'])),
-                    QtGui.QStandardItem(req['requisition_number']),
-                    QtGui.QStandardItem(req['department_requesting']),
-                    QtGui.QStandardItem(req['creation_date']),
-                    QtGui.QStandardItem(req['status'].capitalize()),
-                    QtGui.QStandardItem(req['urgency'].capitalize()),
-                    QtGui.QStandardItem(req['notes'] or '')
-                ]
-                self.requisitions_model.appendRow(row_items)
-
-        except sqlite3.Error as e:
-            print(f"Помилка завантаження заявок: {e}")
-            QtWidgets.QMessageBox.critical(
-                self,
-                "Помилка",
-                f"Не вдалося завантажити дані заявок: {str(e)}"
+                current_user_filter_id_for_query = self.user_id
+                print(f"[DEBUG] Встановлено фільтр по користувачу: {current_user_filter_id_for_query}")
+            
+            # Отримуємо заявки
+            requisitions_list = get_requisitions(
+                created_by_user_id=current_user_filter_id_for_query,
+                limit=100
             )
-        finally:
-            if conn:
-                conn.close()
-
-    def on_requisition_double_clicked(self, index):
-        """Обробник подвійного кліку по заявці."""
-        # Отримуємо ID заявки з першої колонки
-        requisition_id = int(self.requisitions_model.data(
-            self.requisitions_model.index(index.row(), 0)
-        ))
-        self.show_requisition_details(requisition_id)
+            
+            print(f"[DEBUG] Отримано {len(requisitions_list)} заявок")
+            
+            # Оновлюємо модель таблиці
+            if hasattr(self, 'requisitions_table'):
+                model = self.requisitions_table.model()
+                if model is None:
+                    model = QtGui.QStandardItemModel()
+                    self.requisitions_table.setModel(model)
+                
+                model.clear()
+                model.setHorizontalHeaderLabels([
+                    "ID", "Номер", "Створив", "Відділ",
+                    "Дата створення", "Статус", "Терміновість",
+                    "Примітки"
+                ])
+                
+                print("[DEBUG] Заповнення таблиці даними")
+                for req in requisitions_list:
+                    row_items = [
+                        QtGui.QStandardItem(str(req.get('id', ''))),
+                        QtGui.QStandardItem(str(req.get('requisition_number', ''))),
+                        QtGui.QStandardItem(str(req.get('created_by_username', ''))),
+                        QtGui.QStandardItem(str(req.get('department_requesting', ''))),
+                        QtGui.QStandardItem(str(req.get('creation_date', ''))),
+                        QtGui.QStandardItem(str(req.get('status', ''))),
+                        QtGui.QStandardItem(str(req.get('urgency', ''))),
+                        QtGui.QStandardItem(str(req.get('notes', '')))
+                    ]
+                    model.appendRow(row_items)
+                
+                print("[DEBUG] Таблиця оновлена")
+                
+                # Налаштовуємо розміри стовпців
+                self.requisitions_table.resizeColumnsToContents()
+                # Обмежуємо максимальну ширину деяких стовпців
+                self.requisitions_table.setColumnWidth(7, min(200, self.requisitions_table.columnWidth(7)))  # Примітки
+                
+        except Exception as e:
+            print(f"[ERROR] Помилка при завантаженні заявок: {str(e)}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
 
     def load_reports_data(self):
         """Завантажує дані для звітів."""

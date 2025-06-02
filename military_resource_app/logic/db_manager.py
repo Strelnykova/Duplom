@@ -28,6 +28,17 @@ def create_connection(db_file=DB_PATH):
     conn = None
     try:
         print(f"Спроба підключення до бази даних: {db_file}")
+        
+        # Якщо шлях відносний, використовуємо поточну директорію
+        if not os.path.isabs(db_file):
+            db_file = os.path.abspath(db_file)
+            
+        # Переконуємося, що директорія для бази даних існує
+        db_dir = os.path.dirname(db_file)
+        if db_dir and not os.path.exists(db_dir):
+            print(f"Створення директорії для бази даних: {db_dir}")
+            os.makedirs(db_dir)
+            
         conn = sqlite3.connect(db_file)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
@@ -35,9 +46,10 @@ def create_connection(db_file=DB_PATH):
         return conn
     except sqlite3.Error as e:
         print(f"Помилка підключення до БД: {e}")
+        raise
     except Exception as e:
         print(f"Неочікувана помилка: {e}")
-    return conn
+        raise
 
 def create_tables(conn):
     """Створює необхідні таблиці в базі даних."""

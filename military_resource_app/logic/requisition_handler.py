@@ -33,11 +33,13 @@ def create_requisition(conn: sqlite3.Connection, user_id: int, department: str,
         ID створеної заявки або None у разі помилки.
     """
     try:
+        print(f"[DEBUG] Створення заявки для користувача {user_id}, відділ {department}")
         cur = conn.cursor()
         # Генеруємо номер заявки (можна модифікувати логіку за потреби)
         cur.execute("SELECT COUNT(*) + 1 as next_num FROM requisitions")
         next_num = cur.fetchone()['next_num']
         requisition_number = f"REQ-{datetime.now().strftime('%Y%m')}-{next_num:04d}"
+        print(f"[DEBUG] Згенерований номер заявки: {requisition_number}")
 
         cur.execute("""
             INSERT INTO requisitions (
@@ -45,10 +47,15 @@ def create_requisition(conn: sqlite3.Connection, user_id: int, department: str,
                 creation_date, status, urgency, notes
             ) VALUES (?, ?, ?, datetime('now'), 'нова', ?, ?)
         """, (requisition_number, user_id, department, urgency, notes))
+        
+        new_id = cur.lastrowid
+        print(f"[DEBUG] Заявка успішно створена з ID: {new_id}")
         conn.commit()
-        return cur.lastrowid
+        return new_id
     except sqlite3.Error as e:
-        print(f"Помилка створення заявки: {e}")
+        print(f"[ERROR] Помилка створення заявки: {e}")
+        print(f"[ERROR] SQL State: {e.sqlite_errorcode if hasattr(e, 'sqlite_errorcode') else 'Unknown'}")
+        print(f"[ERROR] Extended Error Code: {e.sqlite_errorname if hasattr(e, 'sqlite_errorname') else 'Unknown'}")
         return None
 
 def add_item_to_requisition(conn: sqlite3.Connection, requisition_id: int,
@@ -69,16 +76,33 @@ def add_item_to_requisition(conn: sqlite3.Connection, requisition_id: int,
         True якщо успішно, False у разі помилки.
     """
     try:
-        conn.execute("""
+        print(f"[DEBUG] Додавання позиції до заявки {requisition_id}:")
+        print(f"[DEBUG] Ресурс: {resource_name} (ID: {resource_id})")
+        print(f"[DEBUG] Кількість: {quantity_requested}")
+        
+        cur = conn.cursor()
+        cur.execute("""
             INSERT INTO requisition_items (
                 requisition_id, resource_id, requested_resource_name,
-                quantity_requested, quantity_executed, status, notes
-            ) VALUES (?, ?, ?, ?, 0, 'очікує', ?)
+                quantity_requested, item_status, justification
+            ) VALUES (?, ?, ?, ?, 'очікує', ?)
         """, (requisition_id, resource_id, resource_name, quantity_requested, notes))
+        
         conn.commit()
+        print(f"[DEBUG] Позицію успішно додано")
         return True
+        
     except sqlite3.Error as e:
-        print(f"Помилка додавання позиції до заявки: {e}")
+        print(f"[ERROR] Помилка додавання позиції до заявки: {e}")
+        print(f"[ERROR] SQL State: {e.sqlite_errorcode if hasattr(e, 'sqlite_errorcode') else 'Unknown'}")
+        print(f"[ERROR] Extended Error Code: {e.sqlite_errorname if hasattr(e, 'sqlite_errorname') else 'Unknown'}")
+        if conn:
+            conn.rollback()
+        return False
+    except Exception as e:
+        print(f"[ERROR] Неочікувана помилка: {e}")
+        if conn:
+            conn.rollback()
         return False
 
 def get_requisition_details(conn: sqlite3.Connection, requisition_id: int) -> dict:
@@ -192,17 +216,15 @@ def process_requisition_item_execution(conn: sqlite3.Connection, item_id: int,
             """, (quantity_executed, item['resource_id']))
 
         # Оновлюємо статус позиції
-        new_quantity = item['quantity_executed'] + quantity_executed
-        new_status = 'виконано' if new_quantity >= item['quantity_requested'] else 'частково виконано'
+        new_status = 'виконано'
 
         conn.execute("""
             UPDATE requisition_items
-            SET quantity_executed = quantity_executed + ?,
-                status = ?,
+            SET item_status = ?,
                 last_executed = datetime('now'),
                 last_executed_by_user_id = ?
             WHERE id = ?
-        """, (quantity_executed, new_status, executed_by_user_id, item_id))
+        """, (new_status, executed_by_user_id, item_id))
 
         conn.commit()
         return True
@@ -262,76 +284,90 @@ def get_requisitions(date_from: str | None = None, date_to: str | None = None,
                      created_by_user_id: int | None = None,
                      limit: int = 100, offset: int = 0) -> list:
     """
-    Отримує список заявок з можливістю фільтрації та пагінацією.
+    Отримує список заявок з можливістю фільтрації.
 
     Args:
-        date_from: Дата створення "від" (формат YYYY-MM-DD).
-        date_to: Дата створення "до" (формат YYYY-MM-DD).
-        status: Статус заявки для фільтрації.
-        urgency: Терміновість заявки для фільтрації.
-        search_term: Ключове слово для пошуку в номері заявки, відділенні або примітках.
-        created_by_user_id: ID користувача, що створив заявку (для фільтрації).
-        limit: Максимальна кількість заявок для повернення.
-        offset: Зсув для пагінації.
+        date_from: Початкова дата (опціонально)
+        date_to: Кінцева дата (опціонально)
+        status: Статус заявки (опціонально)
+        urgency: Терміновість (опціонально)
+        search_term: Пошуковий запит (опціонально)
+        created_by_user_id: ID користувача-створювача (опціонально)
+        limit: Ліміт результатів
+        offset: Зміщення для пагінації
 
     Returns:
-        Список словників з даними заявок.
+        Список заявок, що відповідають критеріям
     """
-    conn = create_connection()
-    if not conn:
-        return []
-
-    base_query = """
-        SELECT r.id, r.requisition_number, u.username as created_by, r.department_requesting,
-               r.creation_date, r.status, r.urgency, r.notes
-        FROM requisitions r
-        LEFT JOIN users u ON r.created_by_user_id = u.id
-    """
-    conditions = []
-    params = []
-
-    if date_from:
-        # Додаємо час до дати, щоб включити весь день
-        conditions.append("r.creation_date >= ?")
-        params.append(date_from + " 00:00:00")
-    if date_to:
-        conditions.append("r.creation_date <= ?")
-        params.append(date_to + " 23:59:59")
-    if status:
-        conditions.append("r.status = ?")
-        params.append(status)
-    if urgency:
-        conditions.append("r.urgency = ?")
-        params.append(urgency)
-    if search_term:
-        # Пошук за кількома полями
-        conditions.append("""
-            (r.requisition_number LIKE ? OR
-             r.department_requesting LIKE ? OR
-             r.notes LIKE ? OR
-             EXISTS (SELECT 1 FROM requisition_items ri 
-                     WHERE ri.requisition_id = r.id AND ri.requested_resource_name LIKE ?))
-        """)
-        # Додаємо % для пошуку за частковим співпадінням
-        like_term = f"%{search_term}%"
-        params.extend([like_term, like_term, like_term, like_term])
-    if created_by_user_id is not None:  # Важливо перевіряти на None, бо 0 теж може бути ID
-        conditions.append("r.created_by_user_id = ?")
-        params.append(created_by_user_id)
-
-    if conditions:
-        base_query += " WHERE " + " AND ".join(conditions)
-
-    base_query += " ORDER BY r.creation_date DESC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
-
     try:
+        print(f"[DEBUG] Отримання заявок з параметрами:")
+        print(f"[DEBUG] - created_by_user_id: {created_by_user_id}")
+        print(f"[DEBUG] - status: {status}")
+        print(f"[DEBUG] - date_from: {date_from}")
+        print(f"[DEBUG] - date_to: {date_to}")
+        print(f"[DEBUG] - urgency: {urgency}")
+        print(f"[DEBUG] - search_term: {search_term}")
+
+        conn = create_connection()
+        if not conn:
+            print("[ERROR] Не вдалося підключитися до бази даних")
+            return []
+
+        conditions = []
+        params = []
+
+        if created_by_user_id is not None:
+            conditions.append("r.created_by_user_id = ?")
+            params.append(created_by_user_id)
+            print(f"[DEBUG] Додано фільтр по користувачу: {created_by_user_id}")
+
+        if status:
+            conditions.append("r.status = ?")
+            params.append(status)
+
+        if date_from:
+            conditions.append("r.creation_date >= ?")
+            params.append(date_from)
+
+        if date_to:
+            conditions.append("r.creation_date <= ?")
+            params.append(date_to)
+
+        if urgency:
+            conditions.append("r.urgency = ?")
+            params.append(urgency)
+
+        if search_term:
+            conditions.append("(r.requisition_number LIKE ? OR r.notes LIKE ?)")
+            search_pattern = f"%{search_term}%"
+            params.extend([search_pattern, search_pattern])
+
+        where_clause = " AND ".join(conditions) if conditions else "1"
+        query = f"""
+            SELECT r.*, u.username as created_by_username,
+                   u2.username as last_updated_by_username
+            FROM requisitions r
+            LEFT JOIN users u ON r.created_by_user_id = u.id
+            LEFT JOIN users u2 ON r.last_updated_by_user_id = u2.id
+            WHERE {where_clause}
+            ORDER BY r.creation_date DESC
+            LIMIT ? OFFSET ?
+        """
+        params.extend([limit, offset])
+        
+        print(f"[DEBUG] SQL Query: {query}")
+        print(f"[DEBUG] Parameters: {params}")
+
         cur = conn.cursor()
-        cur.execute(base_query, tuple(params))
-        requisitions = cur.fetchall()
-        return [dict(row) for row in requisitions]
+        cur.execute(query, params)
+        results = [dict(row) for row in cur.fetchall()]
+        print(f"[DEBUG] Знайдено {len(results)} заявок")
+        
+        return results
     except sqlite3.Error as e:
-        print(f"Помилка бази даних при отриманні списку заявок: {e}")
+        print(f"[ERROR] Помилка отримання заявок: {e}")
+        print(f"[ERROR] SQL State: {e.sqlite_errorcode if hasattr(e, 'sqlite_errorcode') else 'Unknown'}")
+        print(f"[ERROR] Extended Error Code: {e.sqlite_errorname if hasattr(e, 'sqlite_errorname') else 'Unknown'}")
         return []
     finally:
         if conn:

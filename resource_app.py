@@ -11,7 +11,8 @@ import sqlite3
 import shutil
 import time
 from datetime import datetime, date, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+import traceback
 
 from PIL import Image, ImageQt   # резерв
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -75,6 +76,53 @@ def create_connection(db_file=DB_NAME):
         print(f"Помилка підключення до БД: {e}")
     return conn
 
+def migrate_requisition_items(conn):
+    """Міграція таблиці requisition_items для виправлення структури"""
+    try:
+        cur = conn.cursor()
+        
+        # Створюємо тимчасову таблицю з правильною структурою
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS requisition_items_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                requisition_id INTEGER NOT NULL,
+                resource_id INTEGER,
+                requested_resource_name TEXT NOT NULL,
+                quantity_requested INTEGER NOT NULL,
+                unit_of_measure TEXT,
+                justification TEXT,
+                item_status TEXT DEFAULT 'очікує',
+                FOREIGN KEY (requisition_id) REFERENCES requisitions (id),
+                FOREIGN KEY (resource_id) REFERENCES resources (id)
+            )
+        """)
+        
+        # Копіюємо дані
+        cur.execute("""
+            INSERT INTO requisition_items_new (
+                id, requisition_id, resource_id, requested_resource_name,
+                quantity_requested, unit_of_measure, justification, item_status
+            )
+            SELECT 
+                id, requisition_id, resource_id, requested_resource_name,
+                quantity_requested, unit_of_measure, justification, item_status
+            FROM requisition_items
+        """)
+        
+        # Видаляємо стару таблицю
+        cur.execute("DROP TABLE requisition_items")
+        
+        # Перейменовуємо нову таблицю
+        cur.execute("ALTER TABLE requisition_items_new RENAME TO requisition_items")
+        
+        conn.commit()
+        print("Міграцію таблиці requisition_items успішно завершено")
+        
+    except sqlite3.Error as e:
+        print(f"Помилка під час міграції: {e}")
+        conn.rollback()
+        raise
+
 def create_tables(conn):
     if conn is None:
         print("Немає з'єднання з БД")
@@ -82,6 +130,8 @@ def create_tables(conn):
 
     try:
         cur = conn.cursor()
+        
+        # Спочатку створюємо всі таблиці
         cur.executescript("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,6 +205,17 @@ def create_tables(conn):
         """)
         conn.commit()
         print("Таблиці успішно створено/перевірено.")
+        
+        # Перевіряємо чи потрібна міграція
+        try:
+            cur.execute("SELECT quantity_executed FROM requisition_items LIMIT 1")
+            print("Знайдено колонку quantity_executed - потрібна міграція")
+            migrate_requisition_items(conn)
+        except sqlite3.OperationalError as e:
+            if "no such column" in str(e):
+                print("Структура таблиці requisition_items коректна")
+            else:
+                raise
 
         # Початкове заповнення категорій
         cur.execute("SELECT COUNT(*) FROM categories")
@@ -176,6 +237,7 @@ def create_tables(conn):
 
     except sqlite3.Error as e:
         print(f"Помилка при створенні таблиць: {e}")
+        raise
 
 # ---------------- helpers ----------------
 validate_user = lambda c,u,p: (
@@ -301,7 +363,7 @@ class ResourceEditor(QtWidgets.QDialog):
         )
         if p:
             os.makedirs("images", exist_ok=True)
-            dst = os.path.join("images", f"img_{int(time.time())}{os.path.splitext(p)[1]}")
+            dst = os.path.join("images", f"img_{int(time())}{os.path.splitext(p)[1]}")
             shutil.copy2(p, dst)
             self.img = dst
             QtWidgets.QMessageBox.information(self, "Фото", f"Збережено: {dst}")
@@ -409,6 +471,479 @@ class InfoDialog(QtWidgets.QDialog):
         super().accept()
 
 # =============================================================
+# ---------------------- REQUISITIONS -------------------------
+# =============================================================
+
+class RequisitionDialog(QtWidgets.QDialog):
+    def __init__(self, conn: sqlite3.Connection, parent=None):
+        super().__init__(parent)
+        self.conn = conn
+        self.new_requisition_id = None
+        self.setWindowTitle("Нова заявка")
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+        
+        # Форма заявки
+        form = QtWidgets.QFormLayout()
+        
+        # Поле підрозділу
+        self.department = QtWidgets.QLineEdit()
+        form.addRow("Підрозділ:", self.department)
+        
+        # Поле терміновості
+        self.urgency = QtWidgets.QComboBox()
+        self.urgency.addItems(["планова", "термінова", "критична"])
+        form.addRow("Терміновість:", self.urgency)
+        
+        # Поле приміток
+        self.notes = QtWidgets.QTextEdit()
+        self.notes.setMaximumHeight(100)
+        form.addRow("Примітки:", self.notes)
+        
+        layout.addLayout(form)
+        
+        # Таблиця позицій
+        self.items_table = QtWidgets.QTableWidget()
+        self.items_table.setColumnCount(4)
+        self.items_table.setHorizontalHeaderLabels(["Назва", "Кількість", "Од.вим.", "Примітка"])
+        self.items_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        layout.addWidget(self.items_table)
+        
+        # Кнопки для роботи з позиціями
+        btn_layout = QtWidgets.QHBoxLayout()
+        
+        add_btn = QtWidgets.QPushButton("Додати позицію")
+        add_btn.clicked.connect(self.add_item)
+        btn_layout.addWidget(add_btn)
+        
+        remove_btn = QtWidgets.QPushButton("Видалити позицію")
+        remove_btn.clicked.connect(self.remove_item)
+        btn_layout.addWidget(remove_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        # Кнопки ОК/Скасувати
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok |
+            QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def add_item(self):
+        try:
+            dialog = AddItemDialog(self.conn, self)
+            if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                row = self.items_table.rowCount()
+                self.items_table.insertRow(row)
+                
+                # Додавання даних з правильним форматуванням
+                name_item = QtWidgets.QTableWidgetItem(dialog.resource_name)
+                qty_item = QtWidgets.QTableWidgetItem(str(dialog.final_quantity))
+                unit_item = QtWidgets.QTableWidgetItem(dialog.final_unit)
+                note_item = QtWidgets.QTableWidgetItem(dialog.final_note)
+                
+                # Збереження ID ресурсу в даних елемента
+                name_item.setData(QtCore.Qt.ItemDataRole.UserRole, dialog.resource_id)
+                
+                self.items_table.setItem(row, 0, name_item)
+                self.items_table.setItem(row, 1, qty_item)
+                self.items_table.setItem(row, 2, unit_item)
+                self.items_table.setItem(row, 3, note_item)
+                
+                print(f"Додано позицію до таблиці: {dialog.resource_name}")
+                
+        except Exception as e:
+            print(f"Помилка додавання позиції: {e}")
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Помилка",
+                f"Не вдалося додати позицію: {str(e)}"
+            )
+
+    def remove_item(self):
+        current_row = self.items_table.currentRow()
+        if current_row >= 0:
+            self.items_table.removeRow(current_row)
+
+    def accept(self):
+        print("\n=== Початок створення заявки ===")
+        
+        try:
+            if self.items_table.rowCount() == 0:
+                raise ValueError("Додайте хоча б одну позицію")
+
+            if not self.department.text().strip():
+                raise ValueError("Вкажіть підрозділ")
+
+            # Створення заявки
+            cur = self.conn.cursor()
+            
+            req_number = f"REQ-{int(time())}"
+            department = self.department.text().strip()
+            creation_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            urgency = self.urgency.currentText()
+            notes = self.notes.toPlainText().strip()
+            
+            print(f"""Створення заявки:
+                Номер: {req_number}
+                Підрозділ: {department}
+                Дата: {creation_date}
+                Терміновість: {urgency}
+                Примітки: {notes}
+            """)
+            
+            # Додаємо діагностику SQL запиту
+            insert_query = """
+                INSERT INTO requisitions (
+                    requisition_number,
+                    department_requesting,
+                    creation_date,
+                    status,
+                    urgency,
+                    notes,
+                    created_by_user_id
+                ) VALUES (?, ?, ?, 'нова', ?, ?, ?)
+            """
+            params = (req_number, department, creation_date, urgency, notes, 1)
+            
+            print("\nSQL запит для створення заявки:")
+            print(insert_query)
+            print("Параметри:", params)
+            
+            cur.execute(insert_query, params)
+            
+            self.new_requisition_id = cur.lastrowid
+            print(f"\nСтворено заявку з ID: {self.new_requisition_id}")
+            
+            # Додавання позицій
+            print("\nПочинаємо додавання позицій:")
+            
+            for row in range(self.items_table.rowCount()):
+                try:
+                    name_item = self.items_table.item(row, 0)
+                    qty_item = self.items_table.item(row, 1)
+                    unit_item = self.items_table.item(row, 2)
+                    note_item = self.items_table.item(row, 3)
+                    
+                    if not all([name_item, qty_item, unit_item]):
+                        raise ValueError(f"Неповні дані в рядку {row + 1}")
+                    
+                    name = name_item.text().strip()
+                    qty = int(qty_item.text())
+                    unit = unit_item.text().strip()
+                    note = note_item.text().strip() if note_item else ""
+                    resource_id = name_item.data(QtCore.Qt.ItemDataRole.UserRole)
+                    
+                    print(f"""
+                    Додавання позиції {row + 1}:
+                    - Назва: '{name}'
+                    - Кількість: {qty}
+                    - Од.вим.: {unit}
+                    - ID ресурсу: {resource_id}
+                    - Примітка: {note}
+                    """)
+                    
+                    success = add_item_to_requisition(
+                        conn=self.conn,
+                        requisition_id=self.new_requisition_id,
+                        requested_resource_name=name,
+                        quantity_requested=qty,
+                        unit_of_measure=unit,
+                        resource_id=resource_id,
+                        justification=note
+                    )
+                    
+                    if not success:
+                        raise Exception(f"Не вдалося додати позицію '{name}'")
+                        
+                except Exception as e:
+                    print(f"ПОМИЛКА при додаванні позиції {row + 1}:")
+                    print(f"- Тип помилки: {type(e).__name__}")
+                    print(f"- Повідомлення: {str(e)}")
+                    traceback.print_exc()
+                    raise Exception(f"Помилка додавання позиції {row + 1}: {str(e)}")
+            
+            self.conn.commit()
+            print("\nЗаявку успішно створено!")
+            super().accept()
+            
+        except Exception as e:
+            print(f"\nПОМИЛКА при створенні заявки:")
+            print(f"- Тип помилки: {type(e).__name__}")
+            print(f"- Повідомлення: {str(e)}")
+            traceback.print_exc()
+            self.conn.rollback()
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Помилка",
+                f"Не вдалося створити заявку: {str(e)}"
+            )
+
+class AddItemDialog(QtWidgets.QDialog):
+    def __init__(self, conn: sqlite3.Connection, parent=None):
+        super().__init__(parent)
+        self.conn = conn
+        self.resource_id = None
+        self.setWindowTitle("Додати позицію")
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QtWidgets.QFormLayout(self)
+        
+        # Вибір ресурсу
+        self.resource = QtWidgets.QComboBox()
+        self.resource.setEditable(True)  # Дозволяємо ручне введення
+        self.resource.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
+        self.load_resources()
+        layout.addRow("Ресурс:", self.resource)
+        
+        # Кількість
+        self.quantity = QtWidgets.QSpinBox()
+        self.quantity.setRange(1, 1000000)
+        layout.addRow("Кількість:", self.quantity)
+        
+        # Одиниця виміру
+        self.unit = QtWidgets.QComboBox()
+        self.unit.setEditable(True)  # Дозволяємо ручне введення
+        self.unit.addItems(["шт", "л", "кг", "м", "компл", "пар"])
+        layout.addRow("Од.вим.:", self.unit)
+        
+        # Примітка
+        self.note = QtWidgets.QLineEdit()
+        layout.addRow("Примітка:", self.note)
+        
+        # Кнопки
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok |
+            QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def load_resources(self):
+        try:
+            cur = self.conn.cursor()
+            resources = cur.execute("""
+                SELECT r.id, r.name, r.unit_of_measure, c.name as category
+                FROM resources r
+                JOIN categories c ON r.category_id = c.id
+                ORDER BY c.name, r.name
+            """).fetchall()
+            
+            for resource in resources:
+                display_text = f"{resource['name']} ({resource['unit_of_measure']})"
+                self.resource.addItem(display_text, resource['id'])
+                
+            print(f"Завантажено {len(resources)} ресурсів")
+            
+        except sqlite3.Error as e:
+            print(f"Помилка завантаження ресурсів: {e}")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Помилка",
+                f"Не вдалося завантажити список ресурсів: {str(e)}"
+            )
+
+    def validate_and_accept(self):
+        try:
+            print("\n=== Валідація даних позиції ===")
+            
+            # Отримуємо та валідуємо дані
+            resource_name = self.resource.currentText().strip()
+            print(f"\nПеревірка назви ресурсу:")
+            print(f"- Введено: '{resource_name}'")
+            
+            if not resource_name:
+                raise ValueError("Назва ресурсу не може бути порожньою")
+            print("- Назва валідна")
+                
+            quantity = self.quantity.value()
+            print(f"\nПеревірка кількості:")
+            print(f"- Введено: {quantity}")
+            
+            if quantity <= 0:
+                raise ValueError("Кількість повинна бути більше 0")
+            print("- Кількість валідна")
+                
+            unit = self.unit.currentText().strip()
+            print(f"\nПеревірка одиниці виміру:")
+            print(f"- Введено: '{unit}'")
+            
+            if not unit:
+                raise ValueError("Вкажіть одиницю виміру")
+            print("- Одиниця виміру валідна")
+            
+            # Зберігаємо дані
+            self.resource_name = resource_name
+            self.resource_id = self.resource.currentData()
+            self.final_quantity = quantity
+            self.final_unit = unit
+            self.final_note = self.note.text().strip()
+            
+            print(f"""\nДані позиції валідні:
+                Назва: {self.resource_name}
+                ID: {self.resource_id}
+                Кількість: {self.final_quantity}
+                Од.вим.: {self.final_unit}
+                Примітка: {self.final_note}
+            """)
+            
+            super().accept()
+            
+        except Exception as e:
+            print(f"\nПОМИЛКА валідації позиції:")
+            print(f"- Тип помилки: {type(e).__name__}")
+            print(f"- Повідомлення: {str(e)}")
+            print("- Деталі:")
+            traceback.print_exc()
+            QtWidgets.QMessageBox.warning(self, "Помилка", str(e))
+
+def add_item_to_requisition(
+    conn: sqlite3.Connection,
+    requisition_id: int,
+    requested_resource_name: str,
+    quantity_requested: int,
+    unit_of_measure: str,
+    resource_id: Optional[int] = None,
+    justification: Optional[str] = None
+) -> bool:
+    """
+    Додає позицію до заявки з розширеною діагностикою та обробкою помилок.
+    """
+    print("\n" + "="*50)
+    print("ДІАГНОСТИКА ДОДАВАННЯ ПОЗИЦІЇ ДО ЗАЯВКИ")
+    print("="*50)
+    
+    print("\nВхідні параметри:")
+    print(f"- requisition_id: {requisition_id} (тип: {type(requisition_id)})")
+    print(f"- requested_resource_name: '{requested_resource_name}' (тип: {type(requested_resource_name)})")
+    print(f"- quantity_requested: {quantity_requested} (тип: {type(quantity_requested)})")
+    print(f"- unit_of_measure: '{unit_of_measure}' (тип: {type(unit_of_measure)})")
+    print(f"- resource_id: {resource_id} (тип: {type(resource_id)})")
+    print(f"- justification: '{justification}' (тип: {type(justification)})")
+    
+    try:
+        cur = conn.cursor()
+        
+        # 1. Перевірка структури таблиці
+        print("\nПеревірка структури таблиці requisition_items:")
+        table_info = cur.execute("PRAGMA table_info(requisition_items)").fetchall()
+        for col in table_info:
+            print(f"- Колонка: {col['name']}, Тип: {col['type']}, NotNull: {col['notnull']}")
+        
+        # 2. Перевірка існування заявки
+        print("\nПеревірка існування заявки:")
+        cur.execute("SELECT * FROM requisitions WHERE id = ?", (requisition_id,))
+        requisition = cur.fetchone()
+        if not requisition:
+            raise ValueError(f"Заявка з ID {requisition_id} не існує")
+        print(f"- Знайдено заявку: {dict(requisition)}")
+        
+        # 3. Валідація даних
+        print("\nВалідація даних:")
+        if not isinstance(requisition_id, int) or requisition_id <= 0:
+            raise ValueError(f"Некоректний ID заявки: {requisition_id}")
+        print("- ID заявки валідний")
+        
+        clean_name = requested_resource_name.strip()
+        if not clean_name:
+            raise ValueError("Назва ресурсу не може бути порожньою")
+        print(f"- Назва ресурсу валідна: '{clean_name}'")
+        
+        if not isinstance(quantity_requested, int) or quantity_requested <= 0:
+            raise ValueError(f"Некоректна кількість: {quantity_requested}")
+        print("- Кількість валідна")
+        
+        clean_unit = unit_of_measure.strip()
+        if not clean_unit:
+            raise ValueError("Одиниця виміру не може бути порожньою")
+        print(f"- Одиниця виміру валідна: '{clean_unit}'")
+        
+        # 4. Перевірка resource_id
+        if resource_id is not None:
+            print("\nПеревірка існування ресурсу:")
+            cur.execute("""
+                SELECT r.*, c.name as category_name 
+                FROM resources r 
+                JOIN categories c ON r.category_id = c.id 
+                WHERE r.id = ?
+            """, (resource_id,))
+            resource = cur.fetchone()
+            if not resource:
+                print(f"- Попередження: Ресурс з ID {resource_id} не знайдено")
+                resource_id = None
+            else:
+                print(f"- Знайдено ресурс: {dict(resource)}")
+        
+        # 5. Додавання позиції
+        print("\nДодавання позиції до БД:")
+        insert_query = """
+            INSERT INTO requisition_items (
+                requisition_id,
+                resource_id,
+                requested_resource_name,
+                quantity_requested,
+                unit_of_measure,
+                justification,
+                item_status
+            ) VALUES (?, ?, ?, ?, ?, ?, 'очікує')
+        """
+        
+        params = (
+            requisition_id,
+            resource_id,
+            clean_name,
+            quantity_requested,
+            clean_unit,
+            justification.strip() if justification else None
+        )
+        
+        print("SQL запит:", insert_query)
+        print("Параметри:", params)
+        
+        cur.execute(insert_query, params)
+        
+        # 6. Перевірка результату
+        item_id = cur.lastrowid
+        print(f"\nПозицію додано успішно! ID нової позиції: {item_id}")
+        
+        conn.commit()
+        print("\nТранзакцію підтверджено (commit)")
+        return True
+        
+    except sqlite3.Error as e:
+        print("\nПОМИЛКА SQL:")
+        print(f"- Тип помилки: {type(e).__name__}")
+        print(f"- Повідомлення: {str(e)}")
+        print("- Деталі:")
+        traceback.print_exc()
+        conn.rollback()
+        print("- Транзакцію скасовано (rollback)")
+        return False
+        
+    except Exception as e:
+        print("\nЗАГАЛЬНА ПОМИЛКА:")
+        print(f"- Тип помилки: {type(e).__name__}")
+        print(f"- Повідомлення: {str(e)}")
+        print("- Деталі:")
+        traceback.print_exc()
+        conn.rollback()
+        print("- Транзакцію скасовано (rollback)")
+        return False
+    
+    finally:
+        print("\n" + "="*50)
+        print("КІНЕЦЬ ДІАГНОСТИКИ")
+        print("="*50 + "\n")
+
+# =============================================================
 # --------------------------- MAIN UI -------------------------
 # =============================================================
 
@@ -485,6 +1020,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for txt, slot in [
             ("Редагувати", self.edit),
             ("Видалити", self.delete),
+            ("Заявка", self.create_requisition),
             ("Звіт", self.export_report),
             ("Аналітика Залишків", self.qty),
             ("Аналітика Витрат", self.cost),
@@ -597,6 +1133,17 @@ class MainWindow(QtWidgets.QMainWindow):
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             self.check_alerts()
 
+    def create_requisition(self):
+        """Створення нової заявки"""
+        dialog = RequisitionDialog(self.conn, self)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self.load_all()  # Оновлюємо дані після створення заявки
+            QtWidgets.QMessageBox.information(
+                self,
+                "Успіх",
+                "Заявку успішно створено!"
+            )
+
     # -------- reporting ----------
     def export_report(self):
         rid = self.selected_id()
@@ -607,7 +1154,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "SELECT * FROM resources WHERE id=?", (rid,)
         ).fetchone()
         os.makedirs("reports", exist_ok=True)
-        fname = os.path.join("reports", f"report_{row['name']}_{int(time.time())}.txt")
+        fname = os.path.join("reports", f"report_{row['name']}_{int(time())}")
         with open(fname, "w", encoding="utf-8") as f:
             for k in row.keys():
                 f.write(f"{k}: {row[k]}\n")

@@ -8,6 +8,7 @@ import sys
 import os
 from datetime import datetime
 from PyQt6 import QtCore, QtGui, QtWidgets
+import sqlite3
 
 # Налаштування шляху для імпорту модулів
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -184,14 +185,23 @@ class TransactionDialog(QtWidgets.QDialog):
 
     def accept(self):
         """Обробляє підтвердження діалогу."""
-        # Перевірка введених даних
-        if not self._validate_input():
+        try:
+            # Перевірка введених даних
+            if not self._validate_input():
+                return
+            
+            # Збереження транзакції
+            if self._save_transaction():
+                super().accept()  # Закриваємо діалог тільки після успішного збереження
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Помилка",
+                f"Неочікувана помилка при створенні транзакції: {str(e)}"
+            )
             return
-        
-        # Збереження транзакції
-        if self._save_transaction():
-            super().accept()
-        
+
     def _validate_input(self) -> bool:
         """Перевіряє коректність введених даних."""
         if not self.resource_combo.currentData():
@@ -226,6 +236,11 @@ class TransactionDialog(QtWidgets.QDialog):
         try:
             conn = create_connection()
             if not conn:
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Помилка з'єднання",
+                    "Не вдалося підключитися до бази даних"
+                )
                 return False
 
             cur = conn.cursor()
@@ -247,50 +262,67 @@ class TransactionDialog(QtWidgets.QDialog):
                     )
                     return False
 
-            # Зберігаємо транзакцію
-            cur.execute("""
-                INSERT INTO transactions (
-                    resource_id, transaction_type, quantity, 
-                    department, document_number, notes, 
-                    created_by_user_id, transaction_date
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            """, (
-                resource_id,
-                transaction_type,
-                quantity,
-                self.department_edit.text().strip(),
-                self.document_edit.text().strip(),
-                self.notes_edit.toPlainText().strip(),
-                self.current_user_id
-            ))
-            
-            # Оновлюємо кількість ресурсу
-            if transaction_type == 'надходження':
+            try:
+                # Зберігаємо транзакцію
                 cur.execute("""
-                    UPDATE resources 
-                    SET quantity = quantity + ? 
-                    WHERE id = ?
-                """, (quantity, resource_id))
-            else:  # видача або списання
-                cur.execute("""
-                    UPDATE resources 
-                    SET quantity = quantity - ? 
-                    WHERE id = ?
-                """, (quantity, resource_id))
-            
-            conn.commit()
-            return True
-            
+                    INSERT INTO resource_transactions (
+                        resource_id, transaction_type, quantity_changed, 
+                        transaction_date, recipient_department, issued_by_user_id,
+                        notes
+                    ) VALUES (?, ?, ?, datetime('now'), ?, ?, ?)
+                """, (
+                    resource_id,
+                    transaction_type,
+                    quantity if transaction_type == 'надходження' else -quantity,
+                    self.department_edit.text().strip(),
+                    self.current_user_id,
+                    f"{self.document_edit.text().strip()} - {self.notes_edit.toPlainText().strip()}"
+                ))
+                
+                # Оновлюємо кількість ресурсу
+                if transaction_type == 'надходження':
+                    cur.execute("""
+                        UPDATE resources 
+                        SET quantity = quantity + ? 
+                        WHERE id = ?
+                    """, (quantity, resource_id))
+                else:  # видача або списання
+                    cur.execute("""
+                        UPDATE resources 
+                        SET quantity = quantity - ? 
+                        WHERE id = ?
+                    """, (quantity, resource_id))
+                
+                conn.commit()
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Успіх",
+                    "Транзакцію успішно створено"
+                )
+                return True
+                
+            except sqlite3.Error as e:
+                if conn:
+                    conn.rollback()
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Помилка бази даних",
+                    f"Помилка при збереженні транзакції: {str(e)}"
+                )
+                return False
+                
         except Exception as e:
             if conn:
                 conn.rollback()
             QtWidgets.QMessageBox.critical(
                 self,
                 "Помилка",
-                f"Помилка збереження транзакції: {str(e)}"
+                f"Неочікувана помилка: {str(e)}"
             )
             return False
             
         finally:
             if conn:
-                conn.close() 
+                conn.close()
+            
+        return False 

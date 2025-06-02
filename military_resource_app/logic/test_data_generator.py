@@ -152,19 +152,20 @@ def generate_test_data():
             resource = cur.fetchone()
             
             cur.execute("""
-                INSERT INTO transactions (
-                    resource_id, transaction_type, quantity_changed,
-                    transaction_date, issued_by_user_id, recipient_department,
-                    notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO resource_transactions (
+                    resource_id, transaction_type, quantity, 
+                    department, document_number, notes, 
+                    created_by_user_id, transaction_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
             """, (
                 resource['id'],
                 random.choice(transaction_types),
                 random.randint(1, 10) * (1 if random.random() > 0.5 else -1),
-                transaction_date.strftime("%Y-%m-%d %H:%M:%S"),
+                random.choice(departments),
+                f"DOC-{transaction_date.strftime('%Y%m%d')}-{_ + 1:04d}",
+                f"Тестова транзакція для ресурсу #{resource['id']}",
                 random.randint(1, 2),  # ID користувачів (1 - admin, 2 - user)
-                random.choice(departments) if random.random() > 0.5 else None,
-                f"Тестова транзакція для ресурсу #{resource['id']}"
+                transaction_date.strftime("%Y-%m-%d %H:%M:%S")
             ))
             conn.commit()
 
@@ -177,4 +178,4 @@ def generate_test_data():
         conn.close()
 
 if __name__ == '__main__':
-    generate_test_data() 
+    generate_test_data()                                                            
