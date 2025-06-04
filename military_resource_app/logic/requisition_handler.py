@@ -282,36 +282,38 @@ def get_requisitions(date_from: str | None = None, date_to: str | None = None,
                      status: str | None = None, urgency: str | None = None,
                      search_term: str | None = None,
                      created_by_user_id: int | None = None,
+                     requisition_type_filter: str | None = None,
                      limit: int = 100, offset: int = 0) -> list:
-    """
-    Отримує список заявок з можливістю фільтрації.
-
-    Args:
-        date_from: Початкова дата (опціонально)
-        date_to: Кінцева дата (опціонально)
-        status: Статус заявки (опціонально)
-        urgency: Терміновість (опціонально)
-        search_term: Пошуковий запит (опціонально)
-        created_by_user_id: ID користувача-створювача (опціонально)
-        limit: Ліміт результатів
-        offset: Зміщення для пагінації
-
-    Returns:
-        Список заявок, що відповідають критеріям
-    """
+    conn = None
     try:
-        print(f"[DEBUG] Отримання заявок з параметрами:")
-        print(f"[DEBUG] - created_by_user_id: {created_by_user_id}")
-        print(f"[DEBUG] - status: {status}")
-        print(f"[DEBUG] - date_from: {date_from}")
-        print(f"[DEBUG] - date_to: {date_to}")
-        print(f"[DEBUG] - urgency: {urgency}")
-        print(f"[DEBUG] - search_term: {search_term}")
-
         conn = create_connection()
         if not conn:
-            print("[ERROR] Не вдалося підключитися до бази даних")
+            print("[ERROR] get_requisitions: Не вдалося створити з'єднання з БД.")
             return []
+
+        base_query = """
+            SELECT
+                r.id, r.requisition_number,
+                r.author_manual_rank,
+                r.author_manual_lastname,
+                r.author_manual_initials,
+                u_creator.username as system_user_creator, 
+                r.department_requesting,
+                r.creation_date, r.status, r.urgency,
+                r.purpose_description,
+                r.requisition_type,
+                (
+                    SELECT GROUP_CONCAT(ri.requested_resource_name || ' (' || ri.quantity_requested || COALESCE(' ' || ri.unit_of_measure, '') || ')', '; ')
+                    FROM (
+                        SELECT ri_sub.requested_resource_name, ri_sub.quantity_requested, ri_sub.unit_of_measure
+                        FROM requisition_items ri_sub
+                        WHERE ri_sub.requisition_id = r.id
+                        ORDER BY ri_sub.id LIMIT 3
+                    ) AS ri
+                ) as item_summary
+            FROM requisitions r
+            LEFT JOIN users u_creator ON r.created_by_user_id = u_creator.id 
+        """
 
         conditions = []
         params = []
@@ -319,55 +321,45 @@ def get_requisitions(date_from: str | None = None, date_to: str | None = None,
         if created_by_user_id is not None:
             conditions.append("r.created_by_user_id = ?")
             params.append(created_by_user_id)
-            print(f"[DEBUG] Додано фільтр по користувачу: {created_by_user_id}")
 
-        if status:
-            conditions.append("r.status = ?")
-            params.append(status)
-
-        if date_from:
-            conditions.append("r.creation_date >= ?")
-            params.append(date_from)
-
-        if date_to:
-            conditions.append("r.creation_date <= ?")
-            params.append(date_to)
-
-        if urgency:
-            conditions.append("r.urgency = ?")
-            params.append(urgency)
+        if date_from: conditions.append("DATE(r.creation_date) >= DATE(?)"); params.append(date_from)
+        if date_to: conditions.append("DATE(r.creation_date) <= DATE(?)"); params.append(date_to)
+        if status: conditions.append("r.status = ?"); params.append(status)
+        if urgency: conditions.append("r.urgency = ?"); params.append(urgency)
+        if requisition_type_filter: conditions.append("r.requisition_type = ?"); params.append(requisition_type_filter)
 
         if search_term:
-            conditions.append("(r.requisition_number LIKE ? OR r.notes LIKE ?)")
-            search_pattern = f"%{search_term}%"
-            params.extend([search_pattern, search_pattern])
-
-        where_clause = " AND ".join(conditions) if conditions else "1"
-        query = f"""
-            SELECT r.*, u.username as created_by_username,
-                   u2.username as last_updated_by_username
-            FROM requisitions r
-            LEFT JOIN users u ON r.created_by_user_id = u.id
-            LEFT JOIN users u2 ON r.last_updated_by_user_id = u2.id
-            WHERE {where_clause}
-            ORDER BY r.creation_date DESC
-            LIMIT ? OFFSET ?
-        """
-        params.extend([limit, offset])
+            conditions.append("""
+                (r.requisition_number LIKE ? OR
+                 r.department_requesting LIKE ? OR
+                 r.purpose_description LIKE ? OR 
+                 r.requisition_type LIKE ? OR
+                 r.author_manual_lastname LIKE ? OR 
+                 EXISTS (SELECT 1 FROM requisition_items ri_search
+                         WHERE ri_search.requisition_id = r.id AND ri_search.requested_resource_name LIKE ?))
+            """)
+            like_term = f"%{search_term}%"
+            params.extend([like_term, like_term, like_term, like_term, like_term, like_term])
         
-        print(f"[DEBUG] SQL Query: {query}")
-        print(f"[DEBUG] Parameters: {params}")
+        if conditions:
+            base_query += " WHERE " + " AND ".join(conditions)
+
+        base_query += " ORDER BY r.creation_date DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
 
         cur = conn.cursor()
-        cur.execute(query, params)
-        results = [dict(row) for row in cur.fetchall()]
-        print(f"[DEBUG] Знайдено {len(results)} заявок")
-        
-        return results
+        print(f"[DEBUG] SQL Query (get_requisitions):\n{base_query}")
+        print(f"[DEBUG] Parameters (get_requisitions): {params}")
+        cur.execute(base_query, tuple(params))
+        requisitions_rows = cur.fetchall()
+        print(f"[DEBUG] Отримано {len(requisitions_rows)} заявок з БД (get_requisitions).")
+        return [dict(row) for row in requisitions_rows]
     except sqlite3.Error as e:
-        print(f"[ERROR] Помилка отримання заявок: {e}")
-        print(f"[ERROR] SQL State: {e.sqlite_errorcode if hasattr(e, 'sqlite_errorcode') else 'Unknown'}")
-        print(f"[ERROR] Extended Error Code: {e.sqlite_errorname if hasattr(e, 'sqlite_errorname') else 'Unknown'}")
+        print(f"[ERROR] Помилка отримання заявок (get_requisitions): {e}")
+        if hasattr(e, 'sqlite_errorcode'): print(f"[ERROR] SQL State: {e.sqlite_errorcode}")
+        if hasattr(e, 'sqlite_extended_errcode'): print(f"[ERROR] Extended Error Code: {e.sqlite_extended_errcode}")
+        import traceback
+        traceback.print_exc()
         return []
     finally:
         if conn:

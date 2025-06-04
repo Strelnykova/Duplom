@@ -118,7 +118,11 @@ def create_tables(conn):
                 creation_date TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'нова' CHECK(status IN ('нова', 'на розгляді', 'схвалено', 'відхилено', 'частково виконано', 'виконано')),
                 urgency TEXT DEFAULT 'планова' CHECK(urgency IN ('планова', 'термінова', 'критична')),
-                notes TEXT,
+                purpose_description TEXT,
+                requisition_type TEXT,
+                author_manual_rank TEXT,
+                author_manual_lastname TEXT,
+                author_manual_initials TEXT,
                 FOREIGN KEY (created_by_user_id) REFERENCES users (id)
             );
 
