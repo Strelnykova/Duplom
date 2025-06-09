@@ -18,7 +18,7 @@ if parent_dir not in sys.path:
 from logic.db_manager import create_connection, create_tables
 
 def create_requisition(conn: sqlite3.Connection, user_id: int, department: str,
-                      urgency: str, notes: str | None = None) -> int | None:
+                      urgency: str, purpose_description: str | None = None) -> int | None:
     """
     Створює нову заявку.
 
@@ -27,7 +27,7 @@ def create_requisition(conn: sqlite3.Connection, user_id: int, department: str,
         user_id: ID користувача, що створює заявку.
         department: Відділення, що подає заявку.
         urgency: Терміновість заявки.
-        notes: Додаткові примітки (опціонально).
+        purpose_description: Опис призначення (опціонально).
 
     Returns:
         ID створеної заявки або None у разі помилки.
@@ -44,9 +44,9 @@ def create_requisition(conn: sqlite3.Connection, user_id: int, department: str,
         cur.execute("""
             INSERT INTO requisitions (
                 requisition_number, created_by_user_id, department_requesting,
-                creation_date, status, urgency, notes
+                creation_date, status, urgency, purpose_description
             ) VALUES (?, ?, ?, datetime('now'), 'нова', ?, ?)
-        """, (requisition_number, user_id, department, urgency, notes))
+        """, (requisition_number, user_id, department, urgency, purpose_description))
         
         new_id = cur.lastrowid
         print(f"[DEBUG] Заявка успішно створена з ID: {new_id}")
@@ -436,7 +436,7 @@ if __name__ == '__main__':
         created_by_user_id=1,
         department="Supply Department",
         urgency='urgent',
-        notes="Test requisition for functionality verification"
+        purpose_description="Test requisition for functionality verification"
     )
 
     if new_req_id:
