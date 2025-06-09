@@ -40,9 +40,9 @@ class RequisitionDialog(QtWidgets.QDialog):
         self.urgency_combo.addItems(['планова', 'термінова', 'критична'])
         self.requisition_form_layout.addRow("Терміновість:", self.urgency_combo)
 
-        self.notes_edit = QtWidgets.QTextEdit(self)
-        self.notes_edit.setFixedHeight(60)
-        self.requisition_form_layout.addRow("Примітки до заявки:", self.notes_edit)
+        self.purpose_description_edit = QtWidgets.QTextEdit(self)
+        self.purpose_description_edit.setFixedHeight(60)
+        self.requisition_form_layout.addRow("Опис призначення:", self.purpose_description_edit)
 
         self.requisition_group_box.setLayout(self.requisition_form_layout)
         self.layout.addWidget(self.requisition_group_box)
@@ -264,7 +264,7 @@ class RequisitionDialog(QtWidgets.QDialog):
                     user_id=self.current_user_id,
                     department=department,
                     urgency=self.urgency_combo.currentText(),
-                    notes=self.notes_edit.toPlainText().strip()
+                    purpose_description=self.purpose_description_edit.toPlainText().strip()
                 )
 
                 if not requisition_id:
@@ -334,7 +334,7 @@ class RequisitionDialog(QtWidgets.QDialog):
         urgency_index = self.urgency_combo.findText(self.details_data.get('urgency', 'планова'), QtCore.Qt.MatchFlag.MatchFixedString)
         if urgency_index >= 0:
             self.urgency_combo.setCurrentIndex(urgency_index)
-        self.notes_edit.setPlainText(self.details_data.get('notes', ''))
+        self.purpose_description_edit.setPlainText(self.details_data.get('purpose_description', ''))
 
         # Відображення поточного статусу та налаштування комбо-боксу для зміни
         current_status = self.details_data.get('status', 'нова')
@@ -376,7 +376,7 @@ class RequisitionDialog(QtWidgets.QDialog):
         # Загальна інформація
         self.department_edit.setReadOnly(True)
         self.urgency_combo.setEnabled(False)
-        self.notes_edit.setReadOnly(True)
+        self.purpose_description_edit.setReadOnly(True)
 
         # Секція додавання позицій
         self.items_group_box.setTitle("Перелік позицій у заявці")
