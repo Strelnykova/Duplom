@@ -136,7 +136,7 @@ def add_test_requisitions_and_items(conn):
             try:
                 cur.execute("""
                     INSERT INTO requisitions (requisition_number, created_by_user_id, department_requesting,
-                                              creation_date, status, urgency, notes)
+                                              creation_date, status, urgency, purpose_description)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (req_num, cr_by_id, dep, cr_date, req_status_overall, urg, notes))
                 requisition_id = cur.lastrowid
