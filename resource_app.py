@@ -363,7 +363,7 @@ class ResourceEditor(QtWidgets.QDialog):
         )
         if p:
             os.makedirs("images", exist_ok=True)
-            dst = os.path.join("images", f"img_{int(time())}{os.path.splitext(p)[1]}")
+            dst = os.path.join("images", f"img_{int(time.time())}{os.path.splitext(p)[1]}")
             shutil.copy2(p, dst)
             self.img = dst
             QtWidgets.QMessageBox.information(self, "Фото", f"Збережено: {dst}")
@@ -584,7 +584,7 @@ class RequisitionDialog(QtWidgets.QDialog):
             # Створення заявки
             cur = self.conn.cursor()
             
-            req_number = f"REQ-{int(time())}"
+            req_number = f"REQ-{int(time.time())}"
             department = self.department.text().strip()
             creation_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             urgency = self.urgency.currentText()
@@ -606,7 +606,7 @@ class RequisitionDialog(QtWidgets.QDialog):
                     creation_date,
                     status,
                     urgency,
-                    notes,
+                    purpose_description,
                     created_by_user_id
                 ) VALUES (?, ?, ?, 'нова', ?, ?, ?)
             """
@@ -1154,7 +1154,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "SELECT * FROM resources WHERE id=?", (rid,)
         ).fetchone()
         os.makedirs("reports", exist_ok=True)
-        fname = os.path.join("reports", f"report_{row['name']}_{int(time())}")
+        fname = os.path.join("reports", f"report_{row['name']}_{int(time.time())}")
         with open(fname, "w", encoding="utf-8") as f:
             for k in row.keys():
                 f.write(f"{k}: {row[k]}\n")
